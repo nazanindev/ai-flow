@@ -121,8 +121,10 @@ def phase_directive(run: RunState) -> str:
             "`my plan has one step` and do not collapse steps into a paragraph.\n\n"
             "If the user goal names a specific file/path, the first plan step must target that "
             "file/path directly (or explicitly ask a clarification question first).\n\n"
+            "Do NOT include git commit, git push, or PR creation steps — those are handled "
+            "automatically by the ship phase after execution completes.\n\n"
             "When the plan is complete, AI Flow will automatically capture your numbered plan "
-            "and move to the next phase based on gate settings."
+            "and move to the execute phase."
         )
 
     if run.phase == Phase.execute:
@@ -135,7 +137,9 @@ def phase_directive(run: RunState) -> str:
             f"You are in the EXECUTE phase. Work through the plan steps in order, "
             f"one at a time. After completing each step, briefly confirm what was done "
             f"before moving to the next. When you finish a step, include a standalone line "
-            f"`STEP_DONE: <step_id>` (example: `STEP_DONE: 1`).{steps_str}"
+            f"`STEP_DONE: <step_id>` (example: `STEP_DONE: 1`). "
+            f"Do NOT run `git commit`, `git push`, or create PRs — shipping is handled "
+            f"automatically after all steps complete.{steps_str}"
         )
 
     if run.phase == Phase.verify:

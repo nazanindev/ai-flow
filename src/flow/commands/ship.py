@@ -133,14 +133,19 @@ def cmd_ship(branch_name: str = "", pr_title_override: str = "") -> None:
     console.print("[green]✓ Verification passed[/green]")
 
     # ── 2. Get diff ───────────────────────────────────────────────────────────
+    status_result = _git(["status", "--porcelain"], check=False)
+    if not status_result.stdout.strip():
+        console.print("[yellow]Nothing to commit — working tree is clean.[/yellow]")
+        raise SystemExit(0)
+
     diff_result = _git(["diff", "HEAD"], check=False)
     diff = diff_result.stdout.strip()
     if not diff:
         diff_result = _git(["diff", "--cached"], check=False)
         diff = diff_result.stdout.strip()
     if not diff:
-        console.print("[yellow]Nothing to commit — working tree is clean.[/yellow]")
-        raise SystemExit(0)
+        # Only untracked new files — use status as the change summary for commit message
+        diff = status_result.stdout.strip()
 
     # ── 3. Generate commit message ────────────────────────────────────────────
     console.print("[dim]Generating commit message...[/dim]")
