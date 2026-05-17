@@ -520,28 +520,63 @@ def get_cost_per_pr(project: Optional[str] = None) -> list:
 
 
 def get_recent_runs(project: Optional[str] = None, limit: int = 10) -> list:
+    base = """
+        SELECT r.run_id, r.goal, r.phase, r.status, r.cost_usd, r.updated_at,
+               r.subscription_msgs, r.subscription_tokens_in, r.subscription_tokens_out,
+               r.project, r.branch, r.created_at,
+               COALESCE(b.cnt, 0) AS block_count
+        FROM runs r
+        LEFT JOIN (
+            SELECT run_id, COUNT(*) AS cnt FROM events
+            WHERE event_type = 'tool_blocked' GROUP BY run_id
+        ) b ON b.run_id = r.run_id
+    """
     with _conn() as con:
         if project:
-            rows = con.execute("""
-                SELECT run_id, goal, phase, status, cost_usd, updated_at,
-                       subscription_msgs, subscription_tokens_in, subscription_tokens_out,
-                       project, branch
-                FROM runs WHERE project = ?
-                ORDER BY updated_at DESC LIMIT ?
-            """, [project, limit]).fetchall()
+            rows = con.execute(
+                base + " WHERE r.project = ? ORDER BY r.updated_at DESC LIMIT ?",
+                [project, limit],
+            ).fetchall()
         else:
-            rows = con.execute("""
-                SELECT run_id, goal, phase, status, cost_usd, updated_at,
-                       subscription_msgs, subscription_tokens_in, subscription_tokens_out,
-                       project, branch
-                FROM runs ORDER BY updated_at DESC LIMIT ?
-            """, [limit]).fetchall()
+            rows = con.execute(
+                base + " ORDER BY r.updated_at DESC LIMIT ?",
+                [limit],
+            ).fetchall()
     cols = [
         "run_id", "goal", "phase", "status", "cost_usd", "updated_at",
         "subscription_msgs", "subscription_tokens_in", "subscription_tokens_out",
-        "project", "branch",
+        "project", "branch", "created_at", "block_count",
     ]
     return [dict(zip(cols, r)) for r in rows]
+
+
+def get_latest_events(limit: int = 20, run_id: Optional[str] = None) -> list:
+    """Return the most recent events across all runs (or filtered to one run)."""
+    with _conn() as con:
+        if run_id:
+            rows = con.execute("""
+                SELECT event_type, phase, tool_name, blocked, block_reason,
+                       metadata, created_at, run_id
+                FROM events WHERE run_id = ?
+                ORDER BY created_at DESC LIMIT ?
+            """, [run_id, limit]).fetchall()
+        else:
+            rows = con.execute("""
+                SELECT event_type, phase, tool_name, blocked, block_reason,
+                       metadata, created_at, run_id
+                FROM events ORDER BY created_at DESC LIMIT ?
+            """, [limit]).fetchall()
+    cols = ["event_type", "phase", "tool_name", "blocked", "block_reason",
+            "metadata", "created_at", "run_id"]
+    result = []
+    for r in rows:
+        d = dict(zip(cols, r))
+        try:
+            d["metadata"] = json.loads(d["metadata"]) if d["metadata"] else {}
+        except Exception:
+            d["metadata"] = {}
+        result.append(d)
+    return result
 
 
 def save_event(
