@@ -135,6 +135,82 @@ def ci_review(
 
 
 @app.command()
+def events(
+    run_id: Optional[str] = typer.Argument(None, help="Run ID (defaults to most recent)"),
+) -> None:
+    """Show the event timeline for a run (phase transitions, blocks, session ends)."""
+    from flow.tracker import init_db, get_run_events, get_recent_runs
+    from flow.config import get_project_id
+    from rich.console import Console
+    from datetime import datetime, timezone
+    c = Console()
+    init_db()
+
+    if not run_id:
+        recent = get_recent_runs(get_project_id(), limit=1)
+        if not recent:
+            recent = get_recent_runs(limit=1)
+        if not recent:
+            c.print("[yellow]No runs found.[/yellow]")
+            raise typer.Exit()
+        run_id = recent[0]["run_id"]
+
+    evts = get_run_events(run_id)
+    if not evts:
+        c.print(f"[yellow]No events found for run {run_id}.[/yellow]")
+        raise typer.Exit()
+
+    c.print(f"\n[bold cyan]Event timeline:[/bold cyan] [dim]{run_id}[/dim]\n")
+    try:
+        t0 = datetime.fromisoformat(evts[0]["created_at"]).replace(tzinfo=timezone.utc)
+    except Exception:
+        t0 = datetime.now(timezone.utc)
+
+    for e in evts:
+        try:
+            ts = datetime.fromisoformat(e["created_at"]).replace(tzinfo=timezone.utc)
+            rel = (ts - t0).total_seconds()
+            m = int(rel // 60); s = int(rel % 60)
+            time_str = f"{m:02d}:{s:02d}"
+        except Exception:
+            time_str = "??:??"
+
+        phase = f"[cyan]{e.get('phase',''):7s}[/cyan]"
+        evt_type = e.get("event_type", "")
+        tool = e.get("tool_name", "") or ""
+        blocked = e.get("blocked", False)
+        reason = e.get("block_reason", "") or ""
+        meta = e.get("metadata") or {}
+
+        if blocked:
+            event_color = "red"
+        elif evt_type == "phase_transition":
+            event_color = "green"
+        elif evt_type == "session_end":
+            event_color = "blue"
+        elif evt_type in ("verify_result", "check_result"):
+            passed = meta.get("passed")
+            event_color = "green" if passed else "yellow"
+        else:
+            event_color = "white"
+
+        detail_parts = []
+        if tool:
+            detail_parts.append(f"[bold]{tool}[/bold]")
+        if reason:
+            detail_parts.append(f'[dim]"{reason[:60]}"[/dim]')
+        for k, v in meta.items():
+            if k not in ("from_phase",):
+                detail_parts.append(f"[dim]{k}={v}[/dim]")
+        detail = "  ".join(detail_parts)
+
+        c.print(
+            f"  [dim]{time_str}[/dim]  {phase}  [{event_color}]{evt_type:<20s}[/{event_color}]  {detail}"
+        )
+    c.print()
+
+
+@app.command()
 def serve(port: int = typer.Option(7331, "--port", "-p")) -> None:
     """Start local API server for dashboard frontend."""
     from flow.commands.serve import cmd_serve

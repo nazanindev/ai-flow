@@ -183,6 +183,26 @@ def cmd_check(json_output: bool = False) -> None:
         console.print(f"[red]flow check failed:[/red] {e}")
         raise SystemExit(1)
 
+    try:
+        from flow.tracker import init_db, load_active_run, save_event
+        from flow.config import get_project_id
+        init_db()
+        run = load_active_run(get_project_id())
+        if run:
+            save_event(
+                run_id=run.run_id,
+                event_type="check_result",
+                project=run.project,
+                phase=run.phase.value,
+                metadata={
+                    "overall": report.get("overall", "?"),
+                    "blocker_count": report.get("blocker_count", 0),
+                    "warning_count": report.get("warning_count", 0),
+                },
+            )
+    except Exception:
+        pass
+
     if json_output:
         console.print(json.dumps(report, indent=2))
     else:

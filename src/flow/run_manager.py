@@ -2,9 +2,11 @@
 import anthropic
 import os
 
-from flow.tracker import RunState, Phase, RunStatus, init_db, save_run, load_run, load_active_run
+from datetime import datetime, timezone
+
+from flow.tracker import RunState, Phase, RunStatus, init_db, save_run, load_run, load_active_run, save_event
 from flow.context import build_briefing, summarize_for_new_session
-from flow.observe import trace_run_event, trace_run_started
+from flow.observe import trace_run_event, trace_run_started, trace_phase_transition
 from flow.config import get_project_id, get_branch, constraints
 
 
@@ -14,22 +16,47 @@ def _anthropic():
 
 def create_run(goal: str, feature_id: str = "") -> RunState:
     init_db()
+    now = datetime.now(timezone.utc).isoformat()
     run = RunState(
         goal=goal,
         project=get_project_id(),
         branch=get_branch(),
         feature_id=feature_id,
+        phase_started_at=now,
     )
     save_run(run)
+    save_event(run_id=run.run_id, event_type="phase_transition", project=run.project,
+               phase="plan", metadata={"from_phase": "", "to_phase": "plan", "duration_s": 0.0})
     trace_run_started(run.run_id, run.project, run.branch, goal)
     return run
 
 
 def advance_phase(run: RunState, new_phase: Phase) -> RunState:
+    from_phase = run.phase.value
+    now = datetime.now(timezone.utc)
+    duration_s = 0.0
+    if run.phase_started_at:
+        try:
+            started = datetime.fromisoformat(run.phase_started_at)
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            duration_s = (now - started).total_seconds()
+        except Exception:
+            pass
+
     run.phase = new_phase
     run.current_step = 0
+    run.phase_started_at = now.isoformat()
     save_run(run)
-    trace_run_event(run.run_id, run.project, f"phase:{new_phase.value}")
+
+    save_event(
+        run_id=run.run_id,
+        event_type="phase_transition",
+        project=run.project,
+        phase=new_phase.value,
+        metadata={"from_phase": from_phase, "to_phase": new_phase.value, "duration_s": round(duration_s, 1)},
+    )
+    trace_phase_transition(run.run_id, run.project, from_phase, new_phase.value, duration_s)
     return run
 
 
@@ -95,6 +122,12 @@ def complete_run(run: RunState) -> RunState:
     run.status = RunStatus.complete
     run.claude_session_id = ""
     save_run(run)
+    # Clean up real-time activity file
+    try:
+        from flow.tracker import activity_path
+        activity_path(run.run_id).unlink(missing_ok=True)
+    except Exception:
+        pass
     trace_run_event(run.run_id, run.project, "run_complete", {
         "api_spend_usd": run.cost_usd,
         "subscription_msgs": run.subscription_msgs,

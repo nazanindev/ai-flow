@@ -85,8 +85,15 @@ class RunState:
     # Verify-gate: persisted check state across sessions
     check_blockers_acked: bool = False
     last_check_result: str = ""
+    # Observability: UTC ISO timestamp when current phase started
+    phase_started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
+
+
+def activity_path(run_id: str) -> Path:
+    """Path to the lightweight activity file written by pretool on each allowed tool call."""
+    return DB_PATH.parent / f"activity_{run_id}.json"
 
 
 def _window_start_for(dt: datetime) -> str:
@@ -140,6 +147,7 @@ def init_db() -> None:
             "ALTER TABLE runs ADD COLUMN IF NOT EXISTS feature_id VARCHAR DEFAULT ''",
             "ALTER TABLE runs ADD COLUMN IF NOT EXISTS check_blockers_acked BOOLEAN DEFAULT false",
             "ALTER TABLE runs ADD COLUMN IF NOT EXISTS last_check_result TEXT DEFAULT ''",
+            "ALTER TABLE runs ADD COLUMN IF NOT EXISTS phase_started_at VARCHAR DEFAULT ''",
         ]:
             try:
                 con.execute(migration)
@@ -203,6 +211,22 @@ def init_db() -> None:
             )
         """)
 
+        # Structured event log: phase transitions, blocks, session ends, verify/check results
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS events (
+                id VARCHAR PRIMARY KEY,
+                run_id VARCHAR NOT NULL,
+                project VARCHAR,
+                event_type VARCHAR NOT NULL,
+                phase VARCHAR,
+                tool_name VARCHAR,
+                blocked BOOLEAN DEFAULT FALSE,
+                block_reason VARCHAR,
+                metadata VARCHAR,
+                created_at VARCHAR
+            )
+        """)
+
 
 def save_run(run: RunState) -> None:
     run.updated_at = datetime.now(timezone.utc).isoformat()
@@ -217,8 +241,9 @@ def save_run(run: RunState) -> None:
                 step_budget_used, pr_url,
                 subscription_msgs, subscription_tokens_in, subscription_tokens_out,
                 claude_session_id, feature_id,
-                check_blockers_acked, last_check_result
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                check_blockers_acked, last_check_result,
+                phase_started_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, [
             run.run_id, run.project, run.branch, run.goal,
             run.phase.value, run.current_step, run.max_steps,
@@ -233,6 +258,7 @@ def save_run(run: RunState) -> None:
             run.feature_id or "",
             run.check_blockers_acked,
             run.last_check_result or "",
+            run.phase_started_at or "",
         ])
 
 
@@ -255,6 +281,7 @@ def load_run(run_id: str) -> Optional[RunState]:
         "subscription_msgs", "subscription_tokens_in", "subscription_tokens_out",
         "claude_session_id", "feature_id",
         "check_blockers_acked", "last_check_result",
+        "phase_started_at",
     ]
     with _conn() as con:
         row = con.execute(
@@ -277,6 +304,7 @@ def load_run(run_id: str) -> Optional[RunState]:
     d["feature_id"] = str(d.get("feature_id") or "")
     d["check_blockers_acked"] = bool(d.get("check_blockers_acked") or False)
     d["last_check_result"] = str(d.get("last_check_result") or "")
+    d["phase_started_at"] = str(d.get("phase_started_at") or "")
     return RunState(**{k: v for k, v in d.items() if k in RunState.__dataclass_fields__})
 
 
@@ -513,4 +541,72 @@ def get_recent_runs(project: Optional[str] = None, limit: int = 10) -> list:
         "subscription_msgs", "subscription_tokens_in", "subscription_tokens_out",
         "project", "branch",
     ]
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def save_event(
+    run_id: str,
+    event_type: str,
+    project: str = "",
+    phase: str = "",
+    tool_name: str = "",
+    blocked: bool = False,
+    block_reason: str = "",
+    metadata: Optional[dict] = None,
+) -> None:
+    """Append a structured event to the events table (append-only, non-blocking on error)."""
+    try:
+        with _conn() as con:
+            con.execute("""
+                INSERT INTO events
+                    (id, run_id, project, event_type, phase, tool_name,
+                     blocked, block_reason, metadata, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+            """, [
+                str(uuid.uuid4()),
+                run_id,
+                project or "",
+                event_type,
+                phase or "",
+                tool_name or "",
+                blocked,
+                block_reason or "",
+                json.dumps(metadata) if metadata else "",
+                datetime.now(timezone.utc).isoformat(),
+            ])
+    except Exception:
+        pass
+
+
+def get_run_events(run_id: str) -> list:
+    """Return all events for a run ordered by created_at."""
+    with _conn() as con:
+        rows = con.execute("""
+            SELECT event_type, phase, tool_name, blocked, block_reason, metadata, created_at
+            FROM events WHERE run_id = ?
+            ORDER BY created_at ASC
+        """, [run_id]).fetchall()
+    cols = ["event_type", "phase", "tool_name", "blocked", "block_reason", "metadata", "created_at"]
+    result = []
+    for r in rows:
+        d = dict(zip(cols, r))
+        try:
+            d["metadata"] = json.loads(d["metadata"]) if d["metadata"] else {}
+        except Exception:
+            d["metadata"] = {}
+        result.append(d)
+    return result
+
+
+def get_recent_blocks(project: str, n: int = 20) -> list:
+    """Return the most recent tool_blocked events for a project."""
+    with _conn() as con:
+        rows = con.execute("""
+            SELECT e.run_id, e.phase, e.tool_name, e.block_reason, e.created_at
+            FROM events e
+            JOIN runs r ON r.run_id = e.run_id
+            WHERE e.event_type = 'tool_blocked' AND r.project = ?
+            ORDER BY e.created_at DESC LIMIT ?
+        """, [project, n]).fetchall()
+    cols = ["run_id", "phase", "tool_name", "block_reason", "created_at"]
     return [dict(zip(cols, r)) for r in rows]

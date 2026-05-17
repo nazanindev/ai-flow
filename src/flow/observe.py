@@ -206,6 +206,51 @@ def trace_run_event(
         pass
 
 
+def trace_phase_transition(
+    run_id: str,
+    project: str,
+    from_phase: str,
+    to_phase: str,
+    duration_s: float = 0.0,
+) -> None:
+    """Record a phase transition on the run root trace with timing."""
+    trace_run_event(run_id, project, f"phase:{to_phase}", {
+        "from_phase": from_phase,
+        "to_phase": to_phase,
+        "duration_s": str(round(duration_s, 1)),
+    })
+
+
+def trace_tool_blocked(
+    run_id: str,
+    session_id: str,
+    project: str,
+    phase: str,
+    tool_name: str,
+    reason: str,
+) -> None:
+    """Record a hook block decision on the active session trace."""
+    lf = _client()
+    if not lf:
+        return
+    try:
+        tid = _claude_session_trace_id(run_id, session_id)
+        lf.create_event(
+            trace_context={"trace_id": tid},
+            name="tool_blocked",
+            metadata=_meta_str({
+                "run_id": run_id,
+                "project": project,
+                "phase": phase,
+                "tool_name": tool_name,
+                "reason": reason,
+            }),
+        )
+        lf.flush()
+    except Exception:
+        pass
+
+
 def shutdown_observe() -> None:
     """Best-effort flush + shutdown before process exit (optional for REPL/scripts)."""
     lf = _client()

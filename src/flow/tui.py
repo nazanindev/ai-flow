@@ -6,6 +6,7 @@ This module owns the terminal: split panes per session, live header, input foote
 """
 from __future__ import annotations
 
+import json
 import threading
 import time
 from typing import TYPE_CHECKING, Optional
@@ -41,6 +42,12 @@ class SessionPane(Vertical):
         padding: 0 1;
         height: 1;
     }
+    SessionPane > .pane-activity {
+        background: $surface;
+        padding: 0 1;
+        height: 1;
+        color: $text-muted;
+    }
     SessionPane > RichLog {
         height: 1fr;
         scrollbar-gutter: stable;
@@ -59,6 +66,7 @@ class SessionPane(Vertical):
             f"[bold][{self.session.idx}][/bold] {tag} · {self.session.goal[:35]}",
             classes="pane-title",
         )
+        yield Label("", classes="pane-activity")
         yield RichLog(
             id=f"log-{self.session.idx}",
             highlight=False,
@@ -76,6 +84,12 @@ class SessionPane(Vertical):
         except NoMatches:
             pass
 
+    @staticmethod
+    def _fmt_elapsed(seconds: float) -> str:
+        m = int(seconds // 60)
+        s = int(seconds % 60)
+        return f"{m}m{s:02d}s"
+
     def refresh_title(self) -> None:
         try:
             label = self.query_one(".pane-title", Label)
@@ -86,6 +100,19 @@ class SessionPane(Vertical):
                 waiting = self.session.waiting_for_input
                 run = self.session.run
             phase = run.phase.value if run and st == "running" else st
+
+            elapsed_str = ""
+            if run and st == "running" and run.phase_started_at:
+                try:
+                    from datetime import datetime, timezone
+                    started = datetime.fromisoformat(run.phase_started_at)
+                    if started.tzinfo is None:
+                        started = started.replace(tzinfo=timezone.utc)
+                    elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+                    elapsed_str = f" {self._fmt_elapsed(elapsed)}"
+                except Exception:
+                    pass
+
             if waiting:
                 icon = "?"
             elif st == "running":
@@ -97,9 +124,42 @@ class SessionPane(Vertical):
             branch = self.session.branch
             branch_short = branch[-16:] if len(branch) > 16 else branch
             label.update(
-                f"[bold][{self.session.idx}][/bold] {icon} {tag}:{phase[:4]} "
+                f"[bold][{self.session.idx}][/bold] {icon} {tag}:{phase[:4]}{elapsed_str} "
                 f"[dim]{branch_short}[/dim] · {self.session.goal[:22]}"
             )
+        except NoMatches:
+            pass
+
+    def refresh_activity(self) -> None:
+        try:
+            bar = self.query_one(".pane-activity", Label)
+            with self.session.lock:
+                st = self.session.status
+                run = self.session.run
+
+            if st not in ("running",) or not run:
+                bar.update("")
+                return
+
+            run_id = run.run_id
+            try:
+                from flow.tracker import activity_path
+                path = activity_path(run_id)
+                if not path.exists():
+                    bar.update("  waiting for first tool call…")
+                    return
+                data = json.loads(path.read_text(encoding="utf-8"))
+                tool = data.get("tool", "?")
+                ts = float(data.get("ts", 0))
+                age_s = time.time() - ts
+                if age_s < 15:
+                    bar.update(f"  ⚡ {tool}  ({int(age_s)}s ago)")
+                elif age_s < 90:
+                    bar.update(f"  💭 thinking…  ({int(age_s)}s)")
+                else:
+                    bar.update(f"  ⏸ idle  ({self._fmt_elapsed(age_s)})")
+            except Exception:
+                bar.update("")
         except NoMatches:
             pass
 
@@ -267,9 +327,10 @@ class EmptyState(Static):
         self.update(
             "No sessions yet.\n\n"
             "Type a task to start.\n"
-            "  plan: <question>  — interactive planner (opus)\n"
-            "  review: <branch>  — one-shot code review (haiku)\n"
-            "  /help             — all commands"
+            "  plan: <question>   — interactive planner (opus)\n"
+            "  review: <branch>   — one-shot code review (haiku)\n"
+            "  /dismiss N         — remove a done/failed session\n"
+            "  /help              — all commands"
         )
 
 
@@ -387,6 +448,7 @@ class FlowApp(App):
             for chunk in chunks:
                 pane.append(chunk)
             pane.refresh_title()
+            pane.refresh_activity()
 
             # Notify once when a planner session starts waiting for input
             with session.lock:
@@ -449,6 +511,23 @@ class FlowApp(App):
         elif verb == "/stop":
             self.orchestrator._stop_session(int(arg) if arg.isdigit() else None)
             self.notify("Stop signal sent")
+        elif verb == "/dismiss":
+            if not arg.isdigit():
+                self.notify("Usage: /dismiss N", severity="warning")
+            else:
+                idx = int(arg)
+                err = self.orchestrator.dismiss_session(idx)
+                if err:
+                    self.notify(err, severity="warning")
+                else:
+                    try:
+                        self.query_one(f"#pane-{idx}", SessionPane).remove()
+                    except NoMatches:
+                        pass
+                    if not self.orchestrator.sessions:
+                        self.query_one("#session-grid").display = False
+                        self.query_one("#empty-state").display = True
+                    self.notify(f"Session {idx} dismissed")
         elif verb == "/prompt":
             self.orchestrator._inject_prompt(arg)
         elif verb == "/sessions":
@@ -483,7 +562,7 @@ class FlowApp(App):
             self.orchestrator._resume(arg)
         elif verb == "/help":
             self.notify(
-                "/view N  /stop [N]  /prompt N <msg>  /model opus|sonnet|haiku\n"
+                "/view N  /stop [N]  /dismiss N  /prompt N <msg>  /model opus|sonnet|haiku\n"
                 "/no-agents  /budget $X  /test-flow  /sessions  /status  /quit\n"
                 "Prefix tasks: plan: …  review: …",
                 title="Commands",
