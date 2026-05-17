@@ -22,15 +22,41 @@ You type a task. `flow` spins up an isolated git worktree, runs it through a ful
 
 ## How it works
 
-Limits live in `constraints.yaml` and are enforced by a pre-tool hook that runs before every agent action — not in a system prompt. The agent can't reason past them.
+### Deterministic enforcement via hooks
 
-**Weighted step budgets.** Every tool call has a cost: `Agent: 5.0`, `Write: 2.0`, `Edit: 1.5`, `Read: 0.25`. Each phase has a budget — plan: 15, execute: 40, verify: 15, ship: 8. When it's spent, the hook blocks.
+Limits live in `constraints.yaml` and are enforced by a **pre-tool hook** that runs before every agent action — not in a system prompt. The difference matters: a system prompt is a suggestion the model can reason around. A hook is a wall it physically hits.
 
-**Spend gates.** API utility calls are gated at `$1.00` by default. Configurable per project.
+Three hook types fire on every session:
 
-**Model routing.** Opus plans, Sonnet executes, Haiku reviews and writes commit messages. Routing is in `routing.yaml` with per-keyword overrides — prefix a task with `architecture:` or `quick:` to change the model without touching config.
+| Hook | When | What it does |
+|------|------|-------------|
+| `PreToolUse` | Before every tool call | Checks step budget, bash allowlist, agent spawn gate, spend gate |
+| `PostToolUse` | After every tool call | Writes a `tool_completed` event for resume reconciliation |
+| `Stop` | Session end | Records token usage, runs clean-state checks |
 
-**Auto-remediation.** If verify fails, a fix worker spawns, retries up to twice, then surfaces the failure if it can't resolve it.
+### Weighted step budgets
+
+Every tool call has a cost: `Agent: 5.0`, `Write: 2.0`, `Edit: 1.5`, `Read: 0.25`. Each phase has a budget — plan: 15, execute: 40, verify: 15, ship: 8. When it's spent, the hook blocks and forces a summary. The check and increment happen atomically inside a `BEGIN IMMEDIATE` transaction — two parallel agents can't both slip past the same budget threshold.
+
+### Event-sourced state
+
+Every tool invocation is appended to an immutable event log before execution. The session state (`runs` table) is a derived snapshot — never the write target. This means:
+
+- **No race conditions** on quota accounting: subscription usage is derived from `session_end` events, not a mutable counter
+- **Exact resume**: on restart after a kill, the briefing injected into the new session includes which tools were in-flight and what uncommitted filesystem changes landed — Claude reconciles before re-doing work
+- **Full audit trail**: `flow events <run_id>` shows the complete history of every tool attempted, blocked, or completed
+
+### Model routing
+
+Opus plans, Sonnet executes, Haiku reviews and writes commit messages. Routing is in `routing.yaml` with per-keyword overrides — prefix a task with `architecture:` or `quick:` to change the model without touching config.
+
+### Auto-remediation
+
+If verify fails, a fix worker spawns, retries up to twice, then surfaces the failure if it can't resolve it.
+
+### Parallel isolation
+
+Each session lives in its own git worktree on its own branch. Filesystem conflicts are structurally impossible. The PR is the exit gate — human review is baked into the pipeline, not bolted on.
 
 ---
 
@@ -47,6 +73,8 @@ flow init
 ANTHROPIC_API_KEY=sk-ant-...   # for ship, check, ci-review
 AP_PLAN=pro                    # pro | max5 | max20 | api_only
 ```
+
+State is persisted in `~/.autopilot/costs.sqlite` (SQLite WAL mode — safe for concurrent writes from parallel agents).
 
 ---
 
@@ -72,7 +100,7 @@ Type a task, press Enter. Prefix to route it:
 | `/stop [N]` | Stop session N or all running |
 | `/prompt N <msg>` | Inject a message into session N |
 | `/model opus\|sonnet\|haiku` | Override model for new sessions |
-| `/resume [run_id]` | Reattach to an interrupted run |
+| `/resume [run_id]` | Reattach to an interrupted run — briefing includes in-flight tools and uncommitted changes |
 | `/quit` | Exit, clean up completed worktrees |
 
 Planner sessions show `?` in the pane title when waiting for input.
