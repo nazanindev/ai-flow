@@ -15,9 +15,29 @@ load_dotenv(Path.home() / ".autopilot" / ".env")
 from flow.config import get_project_id, get_branch, constraints, get_plan, get_plan_window_caps
 from flow.tracker import (
     Phase, init_db, load_active_run, save_run, save_subagent_event,
-    get_api_spend_today, get_window_usage,
+    get_api_spend_today, get_window_usage, activity_path, save_event, DB_PATH,
 )
 from flow.observe import trace_subagent
+
+# Populated at start of main() so block() can write structured events
+_ctx: dict = {}
+
+
+def _write_activity(run_id: str, tool_name: str, phase: str) -> None:
+    """Atomically write last-tool-call metadata for TUI polling."""
+    if not run_id or run_id == "none":
+        return
+    try:
+        import time as _time
+        path = activity_path(run_id)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps({"tool": tool_name, "ts": _time.time(), "phase": phase}),
+            encoding="utf-8",
+        )
+        tmp.replace(path)
+    except Exception:
+        pass
 
 
 def _parse_plan_steps(plan_text: str) -> list:
@@ -35,6 +55,19 @@ def _parse_plan_steps(plan_text: str) -> list:
 
 
 def block(reason: str) -> None:
+    if _ctx.get("run_id") and _ctx["run_id"] != "none":
+        try:
+            save_event(
+                run_id=_ctx["run_id"],
+                event_type="tool_blocked",
+                project=_ctx.get("project", ""),
+                phase=_ctx.get("phase", ""),
+                tool_name=_ctx.get("tool_name", ""),
+                blocked=True,
+                block_reason=reason,
+            )
+        except Exception:
+            pass
     print(json.dumps({"decision": "block", "reason": reason}))
     sys.exit(2)
 
@@ -150,6 +183,8 @@ def main() -> None:
     phase = run.phase.value if run else "unknown"
     session_id = payload.get("session_id", str(uuid.uuid4())[:8])
 
+    _ctx.update({"run_id": run_id, "project": project, "phase": phase, "tool_name": tool_name})
+
     # ── ExitPlanMode — persist plan steps ────────────────────────────────────
     if tool_name == "ExitPlanMode":
         plan_text = tool_input.get("plan_text", "")
@@ -160,6 +195,7 @@ def main() -> None:
                 set_plan_steps(run, steps)
                 # Auto-advance to execute (gates removed)
                 advance_phase(run, Phase.execute)
+        _write_activity(run_id, "ExitPlanMode", phase)
         allow()
 
     # ── Agent spawn gate ─────────────────────────────────────────────────────
@@ -239,6 +275,9 @@ def main() -> None:
         run.current_step += 1
         run.step_budget_used += weight
         save_run(run)
+
+    if run_id and run_id != "none" and tool_name:
+        _write_activity(run_id, tool_name, phase)
 
     allow()
 

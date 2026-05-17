@@ -28,7 +28,7 @@ load_dotenv(Path.home() / ".autopilot" / ".env")
 
 from flow.config import get_project_id, get_branch, constraints
 from flow.session_accounting import account_claude_code_session_end
-from flow.tracker import init_db, load_active_run, save_run, RunStatus
+from flow.tracker import init_db, load_active_run, save_run, RunStatus, save_event, activity_path
 
 
 def _run_clean_state_checks() -> tuple[bool, list[str]]:
@@ -125,6 +125,29 @@ def main() -> None:
         return
 
     cr = int(usage.get("cache_read_input_tokens") or 0)
+
+    if run and run.run_id:
+        try:
+            save_event(
+                run_id=run.run_id,
+                event_type="session_end",
+                project=project,
+                phase=run.phase.value if run else "",
+                metadata={
+                    "session_id": session_id,
+                    "model": model,
+                    "tokens_in": tokens_in,
+                    "tokens_out": tokens_out,
+                    "cache_read_tokens": cr,
+                },
+            )
+        except Exception:
+            pass
+        # Clean up stale activity file on session end
+        try:
+            activity_path(run.run_id).unlink(missing_ok=True)
+        except Exception:
+            pass
 
     account_claude_code_session_end(
         project=project,

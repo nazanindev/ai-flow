@@ -130,9 +130,26 @@ def cmd_verify() -> None:
     if passed:
         console.print("[green]✓ Verification passed[/green]")
         if run:
+            from flow.tracker import save_event
+            save_event(
+                run_id=run.run_id,
+                event_type="verify_result",
+                project=run.project,
+                phase=run.phase.value,
+                metadata={"passed": True, "runner": runner or "none"},
+            )
             advance_phase(run, Phase.ship)
     else:
         console.print("[red]✗ Verification failed[/red]")
+        if run:
+            from flow.tracker import save_event
+            save_event(
+                run_id=run.run_id,
+                event_type="verify_result",
+                project=run.project,
+                phase=run.phase.value,
+                metadata={"passed": False, "runner": runner or "none"},
+            )
         if runner:
             what, why, fix = _failure_summary(runner, output)
             console.print(f"[yellow]WHAT:[/yellow] {what}")

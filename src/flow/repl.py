@@ -164,6 +164,19 @@ class FlowOrchestrator:
             capture_output=True, text=True,
         )
 
+    def dismiss_session(self, idx: int) -> str:
+        """Remove a done/failed session and clean up its worktree. Returns error string or ''."""
+        if idx < 1 or idx > len(self.sessions):
+            return f"No session {idx}"
+        session = self.sessions[idx - 1]
+        with session.lock:
+            status = session.status
+        if status == "running":
+            return f"Session {idx} is still running — /stop it first"
+        self._remove_worktree(session)
+        self.sessions.remove(session)
+        return ""
+
     # ── Session output routing ────────────────────────────────────────────────
 
     def _session_push(self, session: AgentSession, text: str) -> None:
@@ -257,6 +270,16 @@ class FlowOrchestrator:
             still_running = session.status == "running"
         if still_running:
             self._drain_inject(session)
+        # Force pipeline if Claude made changes but didn't emit all STEP_DONE markers
+        with session.lock:
+            still_running = session.status == "running"
+        if still_running:
+            r = subprocess.run(
+                ["git", "status", "--porcelain"],
+                capture_output=True, text=True, cwd=str(session.cwd),
+            )
+            if r.stdout.strip():
+                self._run_pipeline(session)
         with session.lock:
             if session.status == "running":
                 session.status = "done"
@@ -810,7 +833,10 @@ class FlowOrchestrator:
         streamed_text = "".join(streamed_parts).strip()
         if result_text and not streamed_text:
             self._session_push(session, result_text + "\n")
-        return result_text or streamed_text
+        # Prefer streamed_text: it accumulates all text deltas including content
+        # emitted before tool calls (e.g. numbered plan before ExitPlanMode).
+        # result_text is only the final message fragment after the last tool call.
+        return streamed_text or result_text
 
     # ── Live table display ────────────────────────────────────────────────────
 
