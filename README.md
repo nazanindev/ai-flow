@@ -1,8 +1,6 @@
 # `flow`
 
-30 minutes. 7 games. Each one planned, implemented, tested, and PR'd by a parallel Claude agent while I watched from the control room.
-
-That's what this is for.
+[Six casino games in 30 minutes](https://github.com/nazanindev/ai_1.0) — each one a parallel agent running `plan → execute → verify → ship` in its own worktree.
 
 ![flow control room](docs/screenshot.png)
 
@@ -22,28 +20,26 @@ You type a task. `flow` spins up an isolated git worktree, runs it through a ful
 
 ## What makes it not a toy
 
-**Hook-enforced constraints, not prompt instructions.**
-Limits live in `constraints.yaml` and fire in a pre-tool hook before every agent action. The agent can't talk its way past them.
+**Constraints are hook-enforced, not prompt instructions.**
+Limits live in `constraints.yaml` and fire in a pre-tool hook before every agent action. The agent can't reason past them.
 
 **Weighted step budgets.**
-Every tool call has a cost: `Agent: 5.0`, `Write: 2.0`, `Edit: 1.5`, `Read: 0.25`. Each pipeline phase has its own budget — plan: 15, execute: 40, verify: 15, ship: 8. When the budget runs out, the hook blocks further calls. Not a warning. A block.
+Every tool call has a cost: `Agent: 5.0`, `Write: 2.0`, `Edit: 1.5`, `Read: 0.25`. Each pipeline phase has its own budget — plan: 15, execute: 40, verify: 15, ship: 8. When the budget is spent, the hook blocks further calls.
 
 **Spend gates.**
-API utility calls are gated at `$1.00` by default. Hard stop, not a nudge.
+API utility calls are gated at `$1.00` by default. Configurable, but always a hard stop.
 
 **Model routing.**
-Opus plans. Sonnet executes. Haiku reviews and writes commit messages. Routing is in `routing.yaml` with per-keyword overrides — prefix a task with `architecture:` or `quick:` to change the model without touching config.
+Opus plans, Sonnet executes, Haiku reviews and writes commit messages. Routing is in `routing.yaml` with per-keyword overrides — prefix a task with `architecture:` or `quick:` to change the model without touching config.
 
 **Auto-remediation.**
-If verify fails, a fix worker spawns automatically, retries up to 2 times, and surfaces the failure to you only if it can't resolve it.
+If verify fails, a fix worker spawns automatically, retries up to 2 times, then surfaces the failure if it can't resolve it.
 
 ---
 
 ## What it's not
 
-Not a Claude API wrapper with a system prompt. Not a harness that asks the model to "please stay within budget." Not another agent framework with 40 config files and a plugin registry.
-
-It's a thin orchestrator running real `claude -p` subprocesses, with real limits enforced at the hook layer.
+The limits aren't in a system prompt asking the model to behave. They're enforced by hooks that run before every tool call, in a separate process the agent doesn't control. That's the meaningful difference from most harnesses.
 
 ---
 
