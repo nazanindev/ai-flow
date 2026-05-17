@@ -1,6 +1,8 @@
 # `flow`
 
-[Six casino games in 30 minutes](https://github.com/nazanindev/ai_1.0) — each one a parallel agent running `plan → execute → verify → ship` in its own worktree.
+Personal AI dev harness. Each task gets an isolated worktree and runs `plan → execute → verify → ship` automatically.
+
+[Six casino games in 30 minutes](https://github.com/nazanindev/ai_1.0) — each one a parallel agent, each one its own pipeline.
 
 ![flow control room](docs/screenshot.png)
 
@@ -18,28 +20,17 @@ You type a task. `flow` spins up an isolated git worktree, runs it through a ful
 
 ---
 
-## What makes it not a toy
+## How it works
 
-**Constraints are hook-enforced, not prompt instructions.**
-Limits live in `constraints.yaml` and fire in a pre-tool hook before every agent action. The agent can't reason past them.
+Limits live in `constraints.yaml` and are enforced by a pre-tool hook that runs before every agent action — not in a system prompt. The agent can't reason past them.
 
-**Weighted step budgets.**
-Every tool call has a cost: `Agent: 5.0`, `Write: 2.0`, `Edit: 1.5`, `Read: 0.25`. Each pipeline phase has its own budget — plan: 15, execute: 40, verify: 15, ship: 8. When the budget is spent, the hook blocks further calls.
+**Weighted step budgets.** Every tool call has a cost: `Agent: 5.0`, `Write: 2.0`, `Edit: 1.5`, `Read: 0.25`. Each phase has a budget — plan: 15, execute: 40, verify: 15, ship: 8. When it's spent, the hook blocks.
 
-**Spend gates.**
-API utility calls are gated at `$1.00` by default. Configurable, but always a hard stop.
+**Spend gates.** API utility calls are gated at `$1.00` by default. Configurable per project.
 
-**Model routing.**
-Opus plans, Sonnet executes, Haiku reviews and writes commit messages. Routing is in `routing.yaml` with per-keyword overrides — prefix a task with `architecture:` or `quick:` to change the model without touching config.
+**Model routing.** Opus plans, Sonnet executes, Haiku reviews and writes commit messages. Routing is in `routing.yaml` with per-keyword overrides — prefix a task with `architecture:` or `quick:` to change the model without touching config.
 
-**Auto-remediation.**
-If verify fails, a fix worker spawns automatically, retries up to 2 times, then surfaces the failure if it can't resolve it.
-
----
-
-## What it's not
-
-The limits aren't in a system prompt asking the model to behave. They're enforced by hooks that run before every tool call, in a separate process the agent doesn't control. That's the meaningful difference from most harnesses.
+**Auto-remediation.** If verify fails, a fix worker spawns, retries up to twice, then surfaces the failure if it can't resolve it.
 
 ---
 
