@@ -4,7 +4,7 @@ Personal AI dev harness. Each task gets an isolated worktree and runs `plan → 
 
 [Six casino games in 30 minutes](https://github.com/nazanindev/ai_1.0) — each one a parallel agent, each one its own pipeline.
 
-![flow control room](docs/screenshot.png)
+Includes sub-agent spawn guardrails, cost controls, and context management. 
 
 ---
 
