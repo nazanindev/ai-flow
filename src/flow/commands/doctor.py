@@ -159,6 +159,23 @@ def cmd_doctor(fix: bool = False) -> None:
                 ok = False
             else:
                 console.print("  [green]✓ Stop smoke (AP_FLOW_HEADLESS=1)[/green]")
+        elif "flow.hooks.posttool" in cmd:
+            payload = json.dumps(
+                {
+                    "tool_name": "Write",
+                    "tool_input": {},
+                    "tool_response": {"output": "ok"},
+                    "session_id": "doctor",
+                }
+            )
+            code, _out, err = _run_hook_stdin(cmd, payload + "\n", {"AP_RUN_ID": "none"})
+            if code != 0:
+                console.print(f"  [red]✗ posttool exit {code}[/red]")
+                if err.strip():
+                    console.print(f"  [dim]{err.strip()[:500]}[/dim]")
+                ok = False
+            else:
+                console.print("  [green]✓ PostToolUse smoke (AP_RUN_ID=none)[/green]")
         elif "flow.hooks.precompact" in cmd:
             code, out, err = _run_hook_stdin(cmd, "{}\n", {"AP_ACTIVE": "1"})
             if code != 0:

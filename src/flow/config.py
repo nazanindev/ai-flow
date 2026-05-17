@@ -7,7 +7,7 @@ import yaml
 load_dotenv(Path.home() / ".autopilot" / ".env")
 load_dotenv(override=False)
 
-DB_PATH = Path(os.getenv("AP_DB_PATH", "~/.autopilot/costs.duckdb")).expanduser()
+DB_PATH = Path(os.getenv("AP_DB_PATH", "~/.autopilot/costs.sqlite")).expanduser()
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 _ROOT = Path(__file__).parent.parent.parent

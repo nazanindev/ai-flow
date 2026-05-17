@@ -2,7 +2,20 @@
 import subprocess
 from pathlib import Path
 from typing import Optional
-from flow.tracker import RunState, Phase
+from flow.tracker import RunState, Phase, get_inflight_tools
+
+
+def _uncommitted_diff_summary(cwd: Optional[Path] = None) -> str:
+    """Return a compact git diff --stat of uncommitted changes, or empty string if clean."""
+    try:
+        r = subprocess.run(
+            ["git", "diff", "HEAD", "--stat"],
+            capture_output=True, text=True, timeout=5,
+            cwd=str(cwd) if cwd else None,
+        )
+        return r.stdout.strip()
+    except Exception:
+        return ""
 
 
 def _repo_tree(cwd: Optional[Path] = None, max_files: int = 80) -> str:
@@ -79,6 +92,20 @@ def build_briefing(run: RunState, style: dict = None, cwd: Optional[Path] = None
     tree = _repo_tree(cwd)
     repo_str = f"\n**Repo files:**\n{tree}\n" if tree else ""
 
+    # Resume reconciliation: surface in-flight tools and uncommitted changes
+    resume_str = ""
+    try:
+        inflight = get_inflight_tools(run.run_id)
+        diff = _uncommitted_diff_summary(cwd)
+        if inflight or diff:
+            resume_str = "\n**Prior session state — verify before re-editing:**\n"
+            if inflight:
+                resume_str += "  In-flight tools at last kill: " + ", ".join(inflight) + "\n"
+            if diff:
+                resume_str += f"  Uncommitted filesystem changes:\n{diff}\n"
+    except Exception:
+        pass
+
     return f"""## AUTOPILOT SESSION BRIEFING
 > This is a structured run context, not a chat history. Do not reference prior conversation.
 
@@ -98,7 +125,7 @@ def build_briefing(run: RunState, style: dict = None, cwd: Optional[Path] = None
 
 **Context summary:**
 {run.context_summary or "(no prior summary — this is the first session for this run)"}
-{repo_str}{agent_style_str}
+{repo_str}{agent_style_str}{resume_str}
 ---
 """
 
@@ -110,8 +137,9 @@ def phase_directive(run: RunState) -> str:
 
     if run.phase == Phase.plan:
         return (
-            "You are in the PLAN phase. Enter plan mode now.\n\n"
-            "Build a numbered execution plan. Each step must be a concrete, atomic action "
+            "You are in the PLAN phase.\n\n"
+            "Build a numbered execution plan and output the steps directly in your response. "
+            "Each step must be a concrete, atomic action "
             "(e.g. 'Add JWT middleware to routes/auth.py', not 'Handle auth'). Include:\n"
             "- File-level actions (create / edit / delete)\n"
             "- Test or verification steps\n"
@@ -119,12 +147,15 @@ def phase_directive(run: RunState) -> str:
             "FORMAT REQUIREMENT (strict): output one step per line as `1. ...`, `2. ...`, etc. "
             "or `Step 1: ...`, `Step 2: ...`. Do not use prose summaries like "
             "`my plan has one step` and do not collapse steps into a paragraph.\n\n"
+            "IMPORTANT: Do NOT call ExitPlanMode and do NOT write to .claude/plans/ files. "
+            "AI Flow captures your plan directly from the numbered steps in your response text — "
+            "writing to a plan file bypasses this and will leave the run stuck in plan phase.\n\n"
             "If the user goal names a specific file/path, the first plan step must target that "
             "file/path directly (or explicitly ask a clarification question first).\n\n"
             "Do NOT include git commit, git push, or PR creation steps — those are handled "
             "automatically by the ship phase after execution completes.\n\n"
-            "When the plan is complete, AI Flow will automatically capture your numbered plan "
-            "and move to the execute phase."
+            "When your response contains the numbered steps, AI Flow will automatically capture "
+            "them and move to the execute phase."
         )
 
     if run.phase == Phase.execute:

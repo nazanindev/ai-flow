@@ -1,7 +1,6 @@
-"""DuckDB-backed store for RunState, sessions, and subagent events."""
+"""SQLite-backed store for RunState, sessions, and subagent events."""
 import json
-import time
-import threading
+import sqlite3
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict
@@ -10,33 +9,49 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-import duckdb
-
 from flow.config import DB_PATH
-
-# DuckDB allows only one read-write connection at a time per file.
-# _db_lock serializes in-process threads; the retry loop handles cross-process
-# contention from claude subprocess hooks that also open DuckDB briefly.
-_db_lock = threading.Lock()
 
 
 @contextmanager
 def _conn():
-    with _db_lock:
-        last_err: Exception = RuntimeError("duckdb.connect never attempted")
-        for attempt in range(6):
-            try:
-                con = duckdb.connect(str(DB_PATH))
-                break
-            except Exception as exc:
-                last_err = exc
-                time.sleep(0.02 * (2 ** attempt))  # 20 40 80 160 320 ms
-        else:
-            raise last_err
+    """Standard read-write connection. All statements execute in a single transaction."""
+    con = sqlite3.connect(str(DB_PATH), timeout=10, check_same_thread=False, isolation_level=None)
+    con.row_factory = sqlite3.Row
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA foreign_keys=ON")
+    con.execute("BEGIN")
+    try:
+        yield con
+        con.execute("COMMIT")
+    except Exception:
         try:
-            yield con
-        finally:
-            con.close()
+            con.execute("ROLLBACK")
+        except Exception:
+            pass
+        raise
+    finally:
+        con.close()
+
+
+@contextmanager
+def _conn_exclusive():
+    """Write-locked connection for atomic read-modify-append operations (BEGIN IMMEDIATE)."""
+    con = sqlite3.connect(str(DB_PATH), timeout=10, check_same_thread=False, isolation_level=None)
+    con.row_factory = sqlite3.Row
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA foreign_keys=ON")
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        yield con
+        con.execute("COMMIT")
+    except Exception:
+        try:
+            con.execute("ROLLBACK")
+        except Exception:
+            pass
+        raise
+    finally:
+        con.close()
 
 
 class Phase(str, Enum):
@@ -51,6 +66,7 @@ class RunStatus(str, Enum):
     blocked = "blocked"
     complete = "complete"
     failed = "failed"
+    cancelled = "cancelled"
 
 
 @dataclass
@@ -103,6 +119,13 @@ def _window_start_for(dt: datetime) -> str:
     return w.isoformat()
 
 
+def _window_end_for(window_start: str) -> str:
+    """Return the exclusive end of a 5-hour window given its ISO start."""
+    from datetime import timedelta
+    dt = datetime.fromisoformat(window_start)
+    return (dt + timedelta(hours=5)).isoformat()
+
+
 def current_window_start() -> str:
     return _window_start_for(datetime.now(timezone.utc))
 
@@ -137,17 +160,17 @@ def init_db() -> None:
             )
         """)
         for migration in [
-            "ALTER TABLE runs ADD COLUMN IF NOT EXISTS plan_steps JSON",
-            "ALTER TABLE runs ADD COLUMN IF NOT EXISTS step_budget_used DOUBLE DEFAULT 0.0",
-            "ALTER TABLE runs ADD COLUMN IF NOT EXISTS pr_url VARCHAR DEFAULT ''",
-            "ALTER TABLE runs ADD COLUMN IF NOT EXISTS subscription_msgs INTEGER DEFAULT 0",
-            "ALTER TABLE runs ADD COLUMN IF NOT EXISTS subscription_tokens_in INTEGER DEFAULT 0",
-            "ALTER TABLE runs ADD COLUMN IF NOT EXISTS subscription_tokens_out INTEGER DEFAULT 0",
-            "ALTER TABLE runs ADD COLUMN IF NOT EXISTS claude_session_id VARCHAR DEFAULT ''",
-            "ALTER TABLE runs ADD COLUMN IF NOT EXISTS feature_id VARCHAR DEFAULT ''",
-            "ALTER TABLE runs ADD COLUMN IF NOT EXISTS check_blockers_acked BOOLEAN DEFAULT false",
-            "ALTER TABLE runs ADD COLUMN IF NOT EXISTS last_check_result TEXT DEFAULT ''",
-            "ALTER TABLE runs ADD COLUMN IF NOT EXISTS phase_started_at VARCHAR DEFAULT ''",
+            "ALTER TABLE runs ADD COLUMN plan_steps JSON",
+            "ALTER TABLE runs ADD COLUMN step_budget_used DOUBLE DEFAULT 0.0",
+            "ALTER TABLE runs ADD COLUMN pr_url VARCHAR DEFAULT ''",
+            "ALTER TABLE runs ADD COLUMN subscription_msgs INTEGER DEFAULT 0",
+            "ALTER TABLE runs ADD COLUMN subscription_tokens_in INTEGER DEFAULT 0",
+            "ALTER TABLE runs ADD COLUMN subscription_tokens_out INTEGER DEFAULT 0",
+            "ALTER TABLE runs ADD COLUMN claude_session_id VARCHAR DEFAULT ''",
+            "ALTER TABLE runs ADD COLUMN feature_id VARCHAR DEFAULT ''",
+            "ALTER TABLE runs ADD COLUMN check_blockers_acked BOOLEAN DEFAULT 0",
+            "ALTER TABLE runs ADD COLUMN last_check_result TEXT DEFAULT ''",
+            "ALTER TABLE runs ADD COLUMN phase_started_at VARCHAR DEFAULT ''",
         ]:
             try:
                 con.execute(migration)
@@ -178,7 +201,7 @@ def init_db() -> None:
             )
         """)
         for migration in [
-            "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS billing_source VARCHAR DEFAULT 'subscription'",
+            "ALTER TABLE sessions ADD COLUMN billing_source VARCHAR DEFAULT 'subscription'",
         ]:
             try:
                 con.execute(migration)
@@ -220,12 +243,17 @@ def init_db() -> None:
                 event_type VARCHAR NOT NULL,
                 phase VARCHAR,
                 tool_name VARCHAR,
-                blocked BOOLEAN DEFAULT FALSE,
+                blocked BOOLEAN DEFAULT 0,
                 block_reason VARCHAR,
                 metadata VARCHAR,
+                weight REAL DEFAULT 0,
                 created_at VARCHAR
             )
         """)
+        try:
+            con.execute("ALTER TABLE events ADD COLUMN weight REAL DEFAULT 0")
+        except Exception:
+            pass  # column already exists
 
 
 def save_run(run: RunState) -> None:
@@ -260,6 +288,46 @@ def save_run(run: RunState) -> None:
             run.last_check_result or "",
             run.phase_started_at or "",
         ])
+
+
+def try_append_tool_event(
+    run_id: str, project: str, tool_name: str, phase: str,
+    weight: float, effective_max: float,
+) -> tuple[bool, str]:
+    """Atomically check budget and append a tool_attempted event.
+
+    Uses BEGIN IMMEDIATE so two concurrent hooks cannot both pass the budget check.
+    Returns (True, event_id) if allowed, (False, "") if budget exhausted.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    event_id = str(uuid.uuid4())
+    with _conn_exclusive() as con:
+        row = con.execute(
+            "SELECT COALESCE(SUM(weight), 0) FROM events WHERE run_id = ? AND event_type = 'tool_attempted'",
+            [run_id],
+        ).fetchone()
+        budget_used = float(row[0]) if row and row[0] is not None else 0.0
+        if budget_used >= effective_max:
+            return False, ""
+        con.execute("""
+            INSERT INTO events
+                (id, run_id, project, event_type, phase, tool_name,
+                 blocked, block_reason, metadata, weight, created_at)
+            VALUES (?,?,?,?,?,?,0,'',?,?,?)
+        """, [
+            event_id, run_id, project or "", "tool_attempted",
+            phase or "", tool_name or "",
+            json.dumps({"effective_max": effective_max}),
+            weight, now,
+        ])
+        con.execute("""
+            UPDATE runs
+            SET step_budget_used = step_budget_used + ?,
+                current_step = current_step + 1,
+                updated_at = ?
+            WHERE run_id = ?
+        """, [weight, now, run_id])
+    return True, event_id
 
 
 def _phase_from_stored(value: object) -> Phase:
@@ -379,45 +447,30 @@ def save_session(
 def record_subscription_window(
     tokens_in: int, tokens_out: int, plan: str = "pro",
 ) -> None:
-    """Upsert quota usage into the current 5-hour window bucket."""
-    ws = current_window_start()
-    now = datetime.now(timezone.utc).isoformat()
-    with _conn() as con:
-        existing = con.execute(
-            "SELECT msgs_used, tokens_in, tokens_out FROM subscription_windows WHERE window_start = ?",
-            [ws],
-        ).fetchone()
-        if existing:
-            con.execute("""
-                UPDATE subscription_windows
-                SET msgs_used = ?, tokens_in = ?, tokens_out = ?, updated_at = ?
-                WHERE window_start = ?
-            """, [
-                existing[0] + 1,
-                existing[1] + tokens_in,
-                existing[2] + tokens_out,
-                now, ws,
-            ])
-        else:
-            con.execute("""
-                INSERT INTO subscription_windows VALUES (?,?,?,?,?,?)
-            """, [ws, plan, 1, tokens_in, tokens_out, now])
+    """No-op: subscription quota is now derived from session_end events via get_window_usage()."""
+    pass
 
 
 def get_window_usage(plan: str = "pro") -> dict:
-    """Return quota usage for the current 5-hour window."""
+    """Return quota usage for the current 5-hour window, derived from session_end events."""
     ws = current_window_start()
+    window_end = _window_end_for(ws)
     with _conn() as con:
-        row = con.execute(
-            "SELECT msgs_used, tokens_in, tokens_out FROM subscription_windows WHERE window_start = ?",
-            [ws],
-        ).fetchone()
+        row = con.execute("""
+            SELECT
+                COUNT(*) AS msgs_used,
+                COALESCE(SUM(CAST(json_extract(metadata, '$.tokens_in') AS INTEGER)), 0) AS tokens_in,
+                COALESCE(SUM(CAST(json_extract(metadata, '$.tokens_out') AS INTEGER)), 0) AS tokens_out
+            FROM events
+            WHERE event_type = 'session_end'
+              AND created_at >= ? AND created_at < ?
+        """, [ws, window_end]).fetchone()
     if not row:
         return {"msgs_used": 0, "tokens_in": 0, "tokens_out": 0, "window_start": ws}
     return {
-        "msgs_used": row[0],
-        "tokens_in": row[1],
-        "tokens_out": row[2],
+        "msgs_used": int(row[0] or 0),
+        "tokens_in": int(row[1] or 0),
+        "tokens_out": int(row[2] or 0),
         "window_start": ws,
     }
 
@@ -442,13 +495,13 @@ def get_api_spend_today(project: Optional[str] = None) -> float:
             row = con.execute("""
                 SELECT COALESCE(SUM(cost_usd), 0) FROM sessions
                 WHERE billing_source = 'api' AND project = ?
-                AND substr(created_at, 1, 10) >= current_date::VARCHAR
+                AND substr(created_at, 1, 10) >= date('now')
             """, [project]).fetchone()
         else:
             row = con.execute("""
                 SELECT COALESCE(SUM(cost_usd), 0) FROM sessions
                 WHERE billing_source = 'api'
-                AND substr(created_at, 1, 10) >= current_date::VARCHAR
+                AND substr(created_at, 1, 10) >= date('now')
             """).fetchone()
     return row[0] if row else 0.0
 
@@ -466,14 +519,14 @@ def get_subscription_tokens_today(project: Optional[str] = None) -> dict:
                 SELECT COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0)
                 FROM sessions
                 WHERE billing_source = 'subscription' AND project = ?
-                AND substr(created_at, 1, 10) >= current_date::VARCHAR
+                AND substr(created_at, 1, 10) >= date('now')
             """, [project]).fetchone()
         else:
             row = con.execute("""
                 SELECT COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0)
                 FROM sessions
                 WHERE billing_source = 'subscription'
-                AND substr(created_at, 1, 10) >= current_date::VARCHAR
+                AND substr(created_at, 1, 10) >= date('now')
             """).fetchone()
     return {"tokens_in": row[0] if row else 0, "tokens_out": row[1] if row else 0}
 
@@ -613,6 +666,34 @@ def save_event(
         pass
 
 
+def get_inflight_tools(run_id: str) -> list[str]:
+    """Return tools attempted in the last session with no matching tool_completed event.
+
+    These represent operations that were in-flight when the session was killed.
+    Scoped to events since the most recent session_started/session_resumed boundary.
+    """
+    with _conn() as con:
+        row = con.execute("""
+            SELECT COALESCE(MAX(created_at), '1970-01-01') FROM events
+            WHERE run_id = ? AND event_type IN ('session_started', 'session_resumed')
+        """, [run_id]).fetchone()
+        since = row[0] if row else "1970-01-01"
+        rows = con.execute("""
+            SELECT e.id, e.tool_name FROM events e
+            WHERE e.run_id = ?
+              AND e.event_type = 'tool_attempted'
+              AND e.created_at > ?
+              AND NOT EXISTS (
+                SELECT 1 FROM events c
+                WHERE c.run_id = ?
+                  AND c.event_type = 'tool_completed'
+                  AND json_extract(c.metadata, '$.attempted_event_id') = e.id
+              )
+            ORDER BY e.created_at ASC
+        """, [run_id, since, run_id]).fetchall()
+        return [r[1] for r in rows if r[1]]
+
+
 def get_run_events(run_id: str) -> list:
     """Return all events for a run ordered by created_at."""
     with _conn() as con:
@@ -645,3 +726,33 @@ def get_recent_blocks(project: str, n: int = 20) -> list:
         """, [project, n]).fetchall()
     cols = ["run_id", "phase", "tool_name", "block_reason", "created_at"]
     return [dict(zip(cols, r)) for r in rows]
+
+
+def set_run_status(run_id: str, status: RunStatus) -> bool:
+    """Update a run's status. Returns True if a row was changed."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        result = con.execute(
+            "UPDATE runs SET status = ?, updated_at = ? WHERE run_id = ?",
+            [status.value, now, run_id],
+        )
+        return (result.rowcount or 0) > 0
+
+
+def retry_run(run_id: str) -> bool:
+    """Set a blocked/failed run back to active so the user can resume it."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        result = con.execute(
+            "UPDATE runs SET status = 'active', updated_at = ? WHERE run_id = ? AND status IN ('blocked','failed')",
+            [now, run_id],
+        )
+        return (result.rowcount or 0) > 0
+
+
+def delete_run(run_id: str) -> bool:
+    """Hard-delete a run and its events. Sessions are kept as billing records."""
+    with _conn() as con:
+        con.execute("DELETE FROM events WHERE run_id = ?", [run_id])
+        result = con.execute("DELETE FROM runs WHERE run_id = ?", [run_id])
+        return (result.rowcount or 0) > 0

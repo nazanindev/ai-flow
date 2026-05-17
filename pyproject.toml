@@ -9,7 +9,6 @@ description = "Personal AI dev harness — cost-optimized Claude Code orchestrat
 requires-python = ">=3.9"
 dependencies = [
     "anthropic>=0.40.0",
-    "duckdb>=1.1.0",
     "fastapi>=0.115.0",
     "langfuse>=3.0.0",
     "litellm>=1.50.0",

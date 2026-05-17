@@ -35,6 +35,9 @@ def hooks_dict() -> dict[str, Any]:
         "PreToolUse": [
             {"matcher": "", "hooks": [{"type": "command", "command": f"{py} -m flow.hooks.pretool"}]}
         ],
+        "PostToolUse": [
+            {"matcher": "", "hooks": [{"type": "command", "command": f"{py} -m flow.hooks.posttool"}]}
+        ],
         "PreCompact": [
             {"hooks": [{"type": "command", "command": f"{py} -m flow.hooks.precompact"}]}
         ],

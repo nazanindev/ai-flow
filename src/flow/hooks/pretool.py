@@ -16,6 +16,7 @@ from flow.config import get_project_id, get_branch, constraints, get_plan, get_p
 from flow.tracker import (
     Phase, init_db, load_active_run, save_run, save_subagent_event,
     get_api_spend_today, get_window_usage, activity_path, save_event, DB_PATH,
+    try_append_tool_event,
 )
 from flow.observe import trace_subagent
 
@@ -23,8 +24,11 @@ from flow.observe import trace_subagent
 _ctx: dict = {}
 
 
-def _write_activity(run_id: str, tool_name: str, phase: str) -> None:
-    """Atomically write last-tool-call metadata for TUI polling."""
+def _write_activity(run_id: str, tool_name: str, phase: str, event_id: str = "") -> None:
+    """Atomically write last-tool-call metadata for TUI polling.
+
+    event_id is the tool_attempted event UUID — posttool reads it to pair tool_completed.
+    """
     if not run_id or run_id == "none":
         return
     try:
@@ -32,7 +36,7 @@ def _write_activity(run_id: str, tool_name: str, phase: str) -> None:
         path = activity_path(run_id)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(
-            json.dumps({"tool": tool_name, "ts": _time.time(), "phase": phase}),
+            json.dumps({"tool": tool_name, "ts": _time.time(), "phase": phase, "event_id": event_id}),
             encoding="utf-8",
         )
         tmp.replace(path)
@@ -254,7 +258,8 @@ def main() -> None:
         except Exception:
             pass
 
-    # ── Step counter (weighted) ───────────────────────────────────────────────
+    # ── Step counter (weighted) — atomic check+append via BEGIN IMMEDIATE ────
+    event_id = ""
     if run and tool_name not in ("", "Agent"):
         tool_weights = c.get("tool_weights", {})
         weight = float(tool_weights.get(tool_name, tool_weights.get("default", 1.0)))
@@ -266,18 +271,17 @@ def main() -> None:
             else (run.max_steps or c.get("max_steps_per_run", 20))
         )
 
-        if run.step_budget_used >= effective_max:
+        allowed, event_id = try_append_tool_event(
+            run.run_id, run.project, tool_name, run.phase.value, weight, effective_max,
+        )
+        if not allowed:
             block(
                 f"Step budget exhausted ({run.step_budget_used:.1f}/{effective_max:.0f} weighted steps). "
                 "Stop and summarize progress."
             )
 
-        run.current_step += 1
-        run.step_budget_used += weight
-        save_run(run)
-
     if run_id and run_id != "none" and tool_name:
-        _write_activity(run_id, tool_name, phase)
+        _write_activity(run_id, tool_name, phase, event_id)
 
     allow()
 
