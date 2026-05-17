@@ -32,6 +32,8 @@ Limits live in `constraints.yaml` and are enforced by a pre-tool hook that runs 
 
 **Auto-remediation.** If verify fails, a fix worker spawns, retries up to twice, then surfaces the failure if it can't resolve it.
 
+**[Engineering notes](docs/ENGINEERING.md)** — design, tradeoffs, and internals 
+
 ---
 
 ## Install
