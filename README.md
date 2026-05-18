@@ -2,15 +2,14 @@
 
 Personal AI dev harness. Each task gets an isolated worktree and runs `plan → execute → verify → ship` automatically.
 
-[Six casino games in 30 minutes](https://github.com/nazanindev/ai_1.0) — each one a parallel agent, each one its own pipeline.
+Includes sub-agent spawn guardrails, cost controls, context management, and observability metrics + dashboard.
+
+[6 Python CLI games in 10 minutes](https://github.com/nazanindev/ai_1.0) — each one a parallel agent, each one its own task and pipeline.
 
 [FastAPI blog API](https://github.com/nazanindev/ai_1.1) — single agent, full CRUD across users / posts / tags with SQLAlchemy and pytest.
 
 [GitHub metrics service](https://github.com/nazanindev/ai_1.2) — coordinator spawned 4 parallel agents (repos, pulls, contributors, webhooks). First real test of the foundation-first spawn pattern.
 
-[ai_1.3](https://github.com/nazanindev/ai_1.3) — next.
-
-![flow control room](docs/screenshot.png)
 
 ---
 
@@ -63,6 +62,8 @@ If verify fails, a fix worker spawns, retries up to twice, then surfaces the fai
 ### Parallel isolation
 
 Each session lives in its own git worktree on its own branch. Filesystem conflicts are structurally impossible. The PR is the exit gate — human review is baked into the pipeline, not bolted on.
+
+**[Engineering notes](docs/ENGINEERING.md)** — design, tradeoffs, and internals 
 
 ---
 
