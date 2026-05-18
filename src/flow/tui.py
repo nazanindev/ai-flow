@@ -63,7 +63,7 @@ class SessionPane(Vertical):
         self._line_buf = ""
 
     def compose(self) -> ComposeResult:
-        type_labels = {"executor": "ex", "planner": "pl", "reviewer": "rv", "coordinator": "co"}
+        type_labels = {"executor": "ex", "planner": "pl", "reviewer": "rv", "dispatcher": "di"}
         tag = type_labels.get(self.session.session_type, self.session.session_type[:2])
         yield Label(
             f"[bold][{self.session.idx}][/bold] {tag} · {self.session.goal[:35]}",
@@ -96,7 +96,7 @@ class SessionPane(Vertical):
     def refresh_title(self) -> None:
         try:
             label = self.query_one(".pane-title", Label)
-            type_labels = {"executor": "ex", "planner": "pl", "reviewer": "rv", "coordinator": "co"}
+            type_labels = {"executor": "ex", "planner": "pl", "reviewer": "rv", "dispatcher": "di"}
             tag = type_labels.get(self.session.session_type, self.session.session_type[:2])
             with self.session.lock:
                 st = self.session.status
@@ -381,7 +381,7 @@ class EmptyState(Static):
             "Type a task to start.\n"
             "  plan: <question>   — interactive planner (opus)\n"
             "  review: <branch>   — one-shot code review (haiku)\n"
-            "  coord: <goal>      — spawn multiple agents (coordinator)\n"
+            "  dispatch: <goal>   — spawn multiple agents (dispatcher)\n"
             "  /dismiss N         — remove a done/failed session\n"
             "  /help              — all commands"
         )
@@ -615,7 +615,7 @@ class FlowApp(App):
             self.notify(
                 "/view N  /stop [N]  /dismiss N  /prompt N <msg>  /model opus|sonnet|haiku\n"
                 "/no-agents  /budget $X  /test-flow  /sessions  /status  /quit\n"
-                "Prefix tasks: plan: …  review: …  coord: …",
+                "Prefix tasks: plan: …  review: …  dispatch: …",
                 title="Commands",
                 timeout=10,
             )
