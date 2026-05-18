@@ -410,16 +410,22 @@ class FlowOrchestrator:
 
         system = (
             "You are a task coordinator for an AI coding harness. "
-            "Decompose the goal into parallel, independently-executable sub-tasks.\n"
+            "Each task runs as a separate agent in its own git worktree and opens a PR. "
+            "The PRs are then merged sequentially — so merge conflicts destroy the output.\n\n"
             "Output ONLY valid JSON:\n"
-            '{"tasks": [{"goal": "...", "type": "executor|planner|reviewer"}]}\n\n'
+            '{"tasks": [{"goal": "...", "type": "executor|planner|reviewer", "owns": ["path/to/file.py"]}]}\n\n'
             f"Rules:\n"
             f"- Maximum {max_spawn} tasks\n"
             "- executor: full pipeline (plan→execute→verify→ship) — use for implementation\n"
             "- planner: interactive planning only — use for design/architecture questions\n"
             "- reviewer: one-shot code review — use for review tasks\n"
-            "- Tasks must be independent (run in parallel, no inter-dependencies)\n"
-            "- Each goal must be concrete and actionable\n"
+            "- CRITICAL: No two tasks may own the same file. Assign every file to exactly one task.\n"
+            "- Shared infrastructure (main.py, database.py, requirements.txt, config, etc.) must be "
+            "owned by exactly ONE task. Other tasks must be told to assume these files exist and "
+            "import from them — they must NOT recreate or modify them.\n"
+            "- Include the file ownership constraint explicitly in each task's goal text: "
+            "e.g. 'Only create app/routes/repos.py and app/models/repo.py. "
+            "Assume app/main.py and app/database.py already exist with standard SQLAlchemy setup.'\n"
             "- Output JSON only, no markdown"
         )
 
@@ -480,10 +486,14 @@ class FlowOrchestrator:
             for t in tasks:
                 goal_text = t["goal"].strip()
                 task_type = t.get("type", "executor")
+                owns = t.get("owns", [])
+                if owns:
+                    owns_str = ", ".join(owns[:6])
+                    goal_text = f"{goal_text}\n\nFile ownership: you own [{owns_str}]. Do not create or modify any other shared files."
                 prefix = prefix_map.get(task_type, "")
                 full_goal = f"{prefix} {goal_text}".strip() if prefix else goal_text
                 sub = self._start_session(full_goal)
-                _ev("coordinator_spawn", {"sub_run_id": sub.run.run_id, "type": task_type, "goal": goal_text[:80]})
+                _ev("coordinator_spawn", {"sub_run_id": sub.run.run_id, "type": task_type, "goal": t["goal"][:80], "owns": owns})
                 self._session_push(session, f"  [{sub.idx}] {task_type}: {goal_text[:60]}\n")
 
             _ev("coordinator_done", {"spawned": len(tasks)})

@@ -84,8 +84,9 @@ allowed_bash_commands:
   - pytest
   - python
   - python3
-  - uv
   - pip
+  - pip3
+  - uv
   - npm
   - npx
   - node
@@ -101,10 +102,21 @@ allowed_bash_commands:
   - mkdir
   - cp
   - mv
+  - rm
   - diff
   - wc
   - jq
   - curl
+  - cd
+  - export
+  - source
+  - for
+  - while
+  - if
+  - true
+  - false
+  - touch
+  - chmod
 
 # File edits allowed only during execute, verify, ship phases (plan is read-only)
 edits_allowed_in:

@@ -126,9 +126,11 @@ class SessionPane(Vertical):
                 icon = "✗"
             branch = self.session.branch
             branch_short = branch[-16:] if len(branch) > 16 else branch
+            pr_url = self.session.pr_url
+            pr_str = f" [bold green]PR#{pr_url.rstrip('/').split('/')[-1]}[/bold green]" if pr_url else ""
             label.update(
-                f"[bold][{self.session.idx}][/bold] {icon} {tag}:{phase[:4]}{elapsed_str} "
-                f"[dim]{branch_short}[/dim] · {self.session.goal[:22]}"
+                f"[bold][{self.session.idx}][/bold] {icon} {tag}:{phase[:4]}{elapsed_str}"
+                f"{pr_str} [dim]{branch_short}[/dim] · {self.session.goal[:22]}"
             )
         except NoMatches:
             pass

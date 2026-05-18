@@ -501,7 +501,12 @@ def cmd_serve(port: int = 7331) -> None:
         from fastapi.responses import HTMLResponse
         evts = get_run_events(run_id)
         if not evts:
-            return JSONResponse([])
+            html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>Events: {run_id}</title>
+<style>body{{font-family:monospace;background:#0d1117;color:#8b949e;padding:2rem}}
+h1{{font-size:1rem;color:#58a6ff;margin-bottom:1rem}}</style></head>
+<body><h1>Event timeline: {run_id}</h1><p>No events recorded for this run.</p></body></html>"""
+            return HTMLResponse(html)
         # Compute relative timestamps from first event
         from datetime import datetime, timezone
         try:
