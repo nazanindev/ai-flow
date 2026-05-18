@@ -58,6 +58,8 @@ Opus plans, Sonnet executes, Haiku reviews and writes commit messages. Routing i
 
 Optional [Langfuse](https://cloud.langfuse.com) integration records run traces, phase transitions, and subagent gate events as structured spans. See [Engineering notes](docs/ENGINEERING.md).
 
+**[Engineering notes](docs/ENGINEERING.md)** — design, tradeoffs, and internals 
+
 ---
 
 ## Install
