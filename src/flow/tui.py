@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Optional
 
 from textual import on, work
 from textual.app import App, ComposeResult
+from textual.message import Message
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, ScrollableContainer
 from textual.css.query import NoMatches
@@ -175,11 +176,16 @@ class SubmitArea(TextArea):
     so we intercept it in on_key instead.
     """
 
-    class Submitted(TextArea.Changed):
+    class Submitted(Message):
         """Posted when the user presses Enter to submit."""
         def __init__(self, area: "SubmitArea", value: str) -> None:
-            super().__init__(area, area.text)
+            super().__init__()
+            self.area = area
             self.value = value
+
+        @property
+        def control(self) -> "SubmitArea":
+            return self.area
 
     def on_key(self, event: Key) -> None:
         if event.key == "enter":
