@@ -54,7 +54,9 @@ Opus plans, Sonnet executes, Haiku reviews and writes commit messages. Routing i
 
 ### Observability
 
-Optional [Langfuse](https://cloud.langfuse.com) integration records run traces, phase transitions, and subagent gate events. `flow stats` reads SQLite directly — zero Langfuse dependency for cost tracking. Two cost surfaces are tracked separately: Claude Code subscription sessions ($0 marginal) and API-metered utility calls (ship, check, ci-review). See [Engineering notes](docs/ENGINEERING.md).
+`flow serve` starts a local dashboard on `:7331` — live run table, event timeline, cost breakdown by project. `flow stats` covers the same data from the CLI. Two cost surfaces are tracked separately: Claude Code subscription sessions ($0 marginal) and API-metered utility calls (ship, check, ci-review).
+
+Optional [Langfuse](https://cloud.langfuse.com) integration records run traces, phase transitions, and subagent gate events as structured spans. See [Engineering notes](docs/ENGINEERING.md).
 
 ---
 
