@@ -311,17 +311,33 @@ class FlowOrchestrator:
         target = session.goal.strip() or "HEAD"
         self._session_push(session, f"→ Reviewing {target}...\n")
 
-        default_branch = self._get_default_branch(str(session.cwd))
-        for diff_args in (["diff", f"{default_branch}...{target}"], ["diff", target], ["diff", "HEAD"]):
+        diff = ""
+
+        # Prefer gh pr diff when a PR URL is available — avoids local git diff
+        # failing when the branch lives in a different worktree or is already merged.
+        if session.pr_url:
+            pr_num = session.pr_url.rstrip("/").split("/")[-1]
             r = subprocess.run(
-                ["git"] + diff_args,
+                ["gh", "pr", "diff", pr_num],
                 capture_output=True, text=True, cwd=str(session.cwd),
             )
             if r.returncode == 0 and r.stdout.strip():
                 diff = r.stdout
-                break
-        else:
-            diff = ""
+
+        if not diff:
+            default_branch = self._get_default_branch(str(session.cwd))
+            for diff_args in (
+                ["diff", f"{default_branch}...{target}"],
+                ["diff", target],
+                ["diff", "HEAD"],
+            ):
+                r = subprocess.run(
+                    ["git"] + diff_args,
+                    capture_output=True, text=True, cwd=str(session.cwd),
+                )
+                if r.returncode == 0 and r.stdout.strip():
+                    diff = r.stdout
+                    break
 
         if not diff.strip():
             self._session_push(session, "No diff found — nothing to review.\n")
@@ -381,6 +397,32 @@ class FlowOrchestrator:
                 steps.append({"id": m.group(1), "description": m.group(2).strip(), "status": "pending"})
         return steps
 
+    def _parse_plan_from_file(self, max_age_s: float = 120.0) -> list:
+        """Scan ~/.claude/plans/ for a recently written plan file and extract numbered steps.
+
+        Called as a fallback when Claude wrote to a plan file instead of outputting steps
+        in its response text. Only considers files written within the last max_age_s seconds
+        to avoid picking up stale plans from previous sessions.
+        """
+        plans_dir = Path.home() / ".claude" / "plans"
+        if not plans_dir.is_dir():
+            return []
+        now = time.time()
+        candidates = [
+            p for p in plans_dir.iterdir()
+            if p.suffix in (".md", ".txt", "") and p.is_file()
+            and (now - p.stat().st_mtime) <= max_age_s
+        ]
+        if not candidates:
+            return []
+        # Most recently modified wins
+        plan_file = max(candidates, key=lambda p: p.stat().st_mtime)
+        try:
+            text = plan_file.read_text(encoding="utf-8")
+        except Exception:
+            return []
+        return self._parse_numbered_plan_steps(text)
+
     def _extract_step_done_ids(self, text: str) -> list:
         results = []
         pattern = re.compile(
@@ -419,8 +461,14 @@ class FlowOrchestrator:
                 session.run = updated
 
         # Fallback plan step parsing if ExitPlanMode wasn't called
-        if session.run.phase == Phase.plan and not session.run.plan_steps and response_text:
-            parsed = self._parse_numbered_plan_steps(response_text)
+        if session.run.phase == Phase.plan and not session.run.plan_steps:
+            parsed = self._parse_numbered_plan_steps(response_text) if response_text else []
+            if not parsed:
+                # Claude wrote to a .claude/plans/ file instead of outputting numbered steps —
+                # scan for a recently modified plan file and extract steps from it.
+                parsed = self._parse_plan_from_file()
+                if parsed:
+                    self._session_push(session, "⚠ Plan was written to file — extracting steps automatically\n")
             if parsed:
                 set_plan_steps(session.run, parsed)
                 updated = load_run(session.run.run_id)
@@ -568,6 +616,7 @@ class FlowOrchestrator:
             model_override="claude-haiku-4-5-20251001",
         )
         if pr_url:
+            session.pr_url = pr_url
             session.output_queue.put(f"→ Reviewing PR: {pr_url}\n")
         session.thread = threading.Thread(
             target=self._session_worker, args=(session,), daemon=True,
