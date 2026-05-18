@@ -31,17 +31,21 @@ You type a task. `flow` spins up an isolated git worktree, runs it through a ful
 
 Limits live in `constraints.yaml` and are enforced by a **pre-tool hook** that runs before every agent action — not in a system prompt. The difference matters: a system prompt is a suggestion the model can reason around. A hook is a wall it physically hits.
 
-Three hook types fire on every session:
+Four hook types fire on every session:
 
 | Hook | When | What it does |
 |------|------|-------------|
 | `PreToolUse` | Before every tool call | Checks step budget, bash allowlist, agent spawn gate, spend gate |
 | `PostToolUse` | After every tool call | Writes a `tool_completed` event for resume reconciliation |
+| `PreCompact` | Before context compaction | Injects a prompt that preserves RunState artifacts across compression |
 | `Stop` | Session end | Records token usage, runs clean-state checks |
+| `post-merge` (git) | After `git merge` | Checks if the active run's PR was merged; auto-closes the run |
 
 ### Weighted step budgets
 
-Every tool call has a cost: `Agent: 5.0`, `Write: 2.0`, `Edit: 1.5`, `Read: 0.25`. Each phase has a budget — plan: 15, execute: 40, verify: 15, ship: 8. When it's spent, the hook blocks and forces a summary. The check and increment happen atomically inside a `BEGIN IMMEDIATE` transaction — two parallel agents can't both slip past the same budget threshold.
+Every tool call has a cost: `Agent: 5.0`, `MultiEdit: 2.5`, `Write: 2.0`, `Edit: 1.5`, `Bash: 1.0`, `Read: 0.25`, `Glob/Grep: 0.1`. Each phase has a budget — plan: 15, execute: 40, verify: 15, ship: 8. When it's spent, the hook blocks and forces a summary. The check and increment happen atomically inside a `BEGIN IMMEDIATE` transaction — two parallel agents can't both slip past the same budget threshold.
+
+`max_turns` and `max_steps` are separate: turns control context consumption, the step budget controls tool cost.
 
 ### Event-sourced state
 
@@ -51,17 +55,58 @@ Every tool invocation is appended to an immutable event log before execution. Th
 - **Exact resume**: on restart after a kill, the briefing injected into the new session includes which tools were in-flight and what uncommitted filesystem changes landed — Claude reconciles before re-doing work
 - **Full audit trail**: `flow events <run_id>` shows the complete history of every tool attempted, blocked, or completed
 
+### Auto-pipeline
+
+With defaults from `constraints.yaml`, no manual intervention is needed after submitting a task:
+
+```yaml
+auto_verify_on_steps_complete: true   # run verify when all plan steps done
+auto_check_before_ship: true          # run code review before ship
+auto_remediate: true                  # spawn fix worker on verify/check failure
+auto_remediate_max_tries: 2           # cap before surfacing failure
+```
+
+The pipeline runs `prompt → plan → execute → verify → fix (if needed) → ship`. The PR is the review gate — human approval is baked in, not bolted on.
+
 ### Model routing
 
-Opus plans, Sonnet executes, Haiku reviews and writes commit messages. Routing is in `routing.yaml` with per-keyword overrides — prefix a task with `architecture:` or `quick:` to change the model without touching config.
+Opus plans, Sonnet executes, Haiku reviews and writes commit messages. Routing is in `routing.yaml` with per-keyword overrides — prefix a task with `architecture:` or `quick:` to change the model without touching config. Utility calls (ship, check, ci-review) support Gemini models as a drop-in swap via `GOOGLE_API_KEY`.
+
+### Smart agent spawn policy
+
+The spawn gate (`agent_spawn_policy: smart`) classifies sub-agent requests by capability and spend tier:
+
+- Read-only agents: always allowed
+- Write-capable, low spend: allowed in any phase
+- Write-capable, medium spend: restricted to `plan` and `execute` phases
+- Write-capable, high spend (≥ API gate): blocked
 
 ### Auto-remediation
 
-If verify fails, a fix worker spawns, retries up to twice, then surfaces the failure if it can't resolve it.
+If verify or check fails, a fix worker spawns, retries up to twice, then surfaces the failure if it can't resolve it.
 
 ### Parallel isolation
 
-Each session lives in its own git worktree on its own branch. Filesystem conflicts are structurally impossible. The PR is the exit gate — human review is baked into the pipeline, not bolted on.
+Each session lives in its own git worktree on its own branch. Filesystem conflicts are structurally impossible.
+
+### Features system
+
+`features.yaml` (versioned with each repo) tracks the feature work the harness is driving. The active feature's behavior and verification command are injected into every session briefing as a sprint contract — scope guardrails, not just documentation.
+
+```sh
+flow features add F01 "Users can reset their password via email" --verify "pytest tests/test_reset.py"
+flow features pick F01      # mark active; injected into all run briefings
+flow features verify        # run verification command → transitions active → passing
+flow features list          # tabular state: not_started | active | blocked | passing
+```
+
+### Style system
+
+`flow init` creates `~/.autopilot/style.yaml` — controls AI-generated artifact format (commit messages, PR titles, PR bodies, review tone, agent verbosity). Per-repo overrides live in `.ap-style.yaml` and deep-merge on top of the global file.
+
+### Observability
+
+Optional [Langfuse](https://cloud.langfuse.com) integration (set `LANGFUSE_*` keys) records run traces, phase transitions, session-end token rollups, and subagent gate events. `flow stats` reads SQLite directly — zero Langfuse dependency for cost tracking.
 
 **[Engineering notes](docs/ENGINEERING.md)** — design, tradeoffs, and internals 
 
@@ -79,6 +124,12 @@ flow init
 ```sh
 ANTHROPIC_API_KEY=sk-ant-...   # for ship, check, ci-review
 AP_PLAN=pro                    # pro | max5 | max20 | api_only
+```
+
+To also scaffold repo-local harness artifacts (`features.yaml`, `.ap-style.yaml`):
+
+```sh
+flow init --repo
 ```
 
 State is persisted in `~/.autopilot/costs.sqlite` (SQLite WAL mode — safe for concurrent writes from parallel agents).
@@ -100,7 +151,7 @@ Type a task, press Enter. Prefix to route it:
 | `review: <branch>` | Haiku | One-shot diff review |
 | `coord: <goal>` | Opus | Coordinator — decomposes goal into parallel sub-agents using foundation-first pattern |
 
-### Commands
+### TUI commands
 
 | | |
 |---|---|
@@ -115,21 +166,58 @@ Planner sessions show `?` in the pane title when waiting for input.
 
 ---
 
-## CI / scripting
+## CLI reference
 
 ```sh
-flow doctor [--fix]          # check hook health
-flow stats                   # cost by project
-flow ship                    # verify → commit → PR
-flow check                   # AI review of local diff
-flow ci-review --pr 42       # for GitHub Actions
+# Harness management
+flow init [--force] [--repo]   # wire hooks; --repo scaffolds features.yaml / .ap-style.yaml
+flow doctor [--fix]            # check hook health; --fix rewrites hooks for current interpreter
+flow serve [--port 7331]       # start local dashboard API + UI
+
+# Run lifecycle
+flow                           # interactive TUI
+flow resume [run_id]           # reattach to interrupted run (picker if no ID given)
+flow status                    # current run state and today's cost
+flow events [run_id]           # full event timeline: tool attempts, blocks, phase transitions
+
+# Code quality
+flow verify                    # run tests/lint for current project
+flow check [--json]            # AI review of local uncommitted diff
+flow ship [--branch-name X]    # verify → commit → PR (with AI commit message + PR body)
+flow ci-review [--pr 42]       # two-pass Haiku→Sonnet review for GitHub Actions
+
+# Features (sprint tracking)
+flow features                  # list all features
+flow features add <id> <behavior> --verify <cmd>
+flow features pick [id]        # activate; injected into session briefings
+flow features verify [--id]    # run verification → marks passing
+flow features active           # show current active feature
+
+# Utilities
+flow stats [--project name]    # cost breakdown by project and recent runs
+flow route <task>              # show which model tier would be used for a task
 ```
+
+---
+
+## Billing surfaces
+
+`flow` tracks two cost surfaces separately:
+
+| Surface | Auth | Billing | Tracked by |
+|---|---|---|---|
+| Claude Code sessions | `claude login` (Pro/Max) | Flat subscription — $0 per session | 5-hour quota window msgs + tokens |
+| flow utility calls | `ANTHROPIC_API_KEY` | Per-token API billing | Real USD per call (ship, check, ci-review) |
+
+The `api_spend_gate_usd` in `constraints.yaml` gates utility calls. It does not cap in-session spend — set a workspace spend cap in the [Anthropic console](https://console.anthropic.com) if you switch to API mode (`AP_FORCE_API_KEY=1`).
 
 ---
 
 ## Design
 
 See [`docs/tradeoffs.md`](docs/tradeoffs.md) for the architectural decisions behind event sourcing, SQLite WAL, hook enforcement, and the coordinator spawn patterns.
+
+See [`docs/ENGINEERING.md`](docs/ENGINEERING.md) for hook health, the two billing surfaces, Langfuse observability gaps, the map-reduce scaling path, and known limitations of hook-based enforcement.
 
 ---
 
