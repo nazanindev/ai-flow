@@ -113,7 +113,15 @@ a:hover{text-decoration:underline}
 .badge-complete{background:#0c2d6b;color:#58a6ff}
 .badge-failed{background:#4b0000;color:#f85149}
 .badge-blocked{background:#3d2b00;color:#d29922}
+.badge-cancelled{background:#21262d;color:#8b949e}
 .blk{color:var(--yellow)}
+
+/* CRUD action buttons in runs table */
+.act-btn{border:none;border-radius:3px;padding:.15rem .4rem;font-size:.65rem;cursor:pointer;font-weight:500;line-height:1.4}
+.act-done{background:#0d4429;color:#3fb950}.act-done:hover{background:#1a6035}
+.act-cancel{background:#3d2b00;color:#d29922}.act-cancel:hover{background:#5a3e00}
+.act-retry{background:#1e0f3d;color:#bc8cff}.act-retry:hover{background:#2d1a5a}
+.act-del{background:#4b0000;color:#f85149}.act-del:hover{background:#6b0000}
 </style>
 </head>
 <body>
@@ -295,22 +303,34 @@ function renderRuns(runs){
     const dur=t0&&t1?fmtDur((t1-t0)/1000):'—';
     const tok=(r.subscription_tokens_in||0)+(r.subscription_tokens_out||0);
     const blocks=r.block_count||0;
+    let acts='<span class="dim">—</span>';
+    if(r.status==='active'){
+      acts=`<button class="act-btn act-done" onclick="markDone('${r.run_id}')">✓ done</button> `+
+           `<button class="act-btn act-cancel" onclick="cancelRun('${r.run_id}')">⊘ cancel</button>`;
+    } else if(r.status==='blocked'){
+      acts=`<button class="act-btn act-retry" onclick="retryRun('${r.run_id}')">↺ retry</button> `+
+           `<button class="act-btn act-done" onclick="markDone('${r.run_id}')">✓ done</button> `+
+           `<button class="act-btn act-cancel" onclick="cancelRun('${r.run_id}')">⊘ cancel</button>`;
+    } else if(r.status==='complete'||r.status==='failed'||r.status==='cancelled'){
+      acts=`<button class="act-btn act-del" onclick="deleteRun('${r.run_id}')">🗑 delete</button>`;
+    }
     return`<tr>
       <td><a class="mono" href="/events/${r.run_id}" target="_blank" title="view events">${r.run_id}</a></td>
-      <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.goal}">${r.goal}</td>
+      <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.goal}">${r.goal}</td>
       <td><span class="badge badge-${r.status}">${r.status}</span></td>
       <td><span class="ph ${phCls(r.phase)}">${r.phase}</span></td>
       <td class="muted">${dur}</td>
       <td class="muted mono">$${r.cost_usd.toFixed(4)}</td>
       <td class="muted">${fmtTok(tok)}</td>
       <td class="${blocks>0?'blk':'dim'}">${blocks>0?'⚠ '+blocks:'—'}</td>
+      <td style="white-space:nowrap">${acts}</td>
     </tr>`;
   }).join('');
   return`<div class="section-card">
     <div class="sh">Recent runs</div>
     <table class="rt">
-      <thead><tr><th>Run ID</th><th>Goal</th><th>Status</th><th>Phase</th><th>Duration</th><th>API cost</th><th>Sub tokens</th><th>Blocks</th></tr></thead>
-      <tbody>${rows||'<tr><td colspan="8" class="dim" style="text-align:center;padding:1rem">No runs yet</td></tr>'}</tbody>
+      <thead><tr><th>Run ID</th><th>Goal</th><th>Status</th><th>Phase</th><th>Duration</th><th>API cost</th><th>Sub tokens</th><th>Blocks</th><th>Actions</th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="9" class="dim" style="text-align:center;padding:1rem">No runs yet</td></tr>'}</tbody>
     </table>
   </div>`;
 }
@@ -318,6 +338,19 @@ function renderRuns(runs){
 async function stopSession(){
   const r=await fetch('/stop',{method:'POST'});
   if(r.ok)load();
+}
+async function markDone(id){
+  await fetch('/runs/'+id+'/complete',{method:'POST'});load();
+}
+async function cancelRun(id){
+  await fetch('/runs/'+id+'/cancel',{method:'POST'});load();
+}
+async function retryRun(id){
+  await fetch('/runs/'+id+'/retry',{method:'POST'});load();
+}
+async function deleteRun(id){
+  if(!confirm('Delete run '+id+'? This cannot be undone.'))return;
+  await fetch('/runs/'+id,{method:'DELETE'});load();
 }
 
 async function load(){
@@ -363,6 +396,7 @@ def cmd_serve(port: int = 7331) -> None:
     from flow.tracker import (
         init_db, get_api_spend_today, get_project_stats, get_recent_runs,
         load_active_run, get_window_usage, get_run_events, get_latest_events, activity_path,
+        RunStatus, set_run_status, retry_run, delete_run,
     )
     from flow.config import DB_PATH, get_project_id, constraints, get_plan, get_plan_window_caps
 
@@ -518,6 +552,26 @@ tr:hover td{{background:#161b22}}</style></head>
         sentinel = DB_PATH.parent / f"stop_{run.run_id}"
         sentinel.touch()
         return JSONResponse({"ok": True, "run_id": run.run_id})
+
+    @app.post("/runs/{run_id}/complete")
+    async def run_complete(run_id: str):
+        ok = set_run_status(run_id, RunStatus.complete)
+        return JSONResponse({"ok": ok, "run_id": run_id, "status": "complete"})
+
+    @app.post("/runs/{run_id}/cancel")
+    async def run_cancel(run_id: str):
+        ok = set_run_status(run_id, RunStatus.cancelled)
+        return JSONResponse({"ok": ok, "run_id": run_id, "status": "cancelled"})
+
+    @app.post("/runs/{run_id}/retry")
+    async def run_retry(run_id: str):
+        ok = retry_run(run_id)
+        return JSONResponse({"ok": ok, "run_id": run_id, "status": "active"})
+
+    @app.delete("/runs/{run_id}")
+    async def run_delete(run_id: str):
+        ok = delete_run(run_id)
+        return JSONResponse({"ok": ok, "run_id": run_id})
 
     console.print(f"[bold cyan]AI Flow dashboard[/bold cyan] → http://localhost:{port}")
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
