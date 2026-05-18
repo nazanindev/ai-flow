@@ -384,12 +384,29 @@ class FlowOrchestrator:
         """Plan via Opus, then spawn sub-agents for each task in the plan."""
         import anthropic
         from flow.billing import metered_call
+        from flow.tracker import save_event, set_run_status, RunStatus, activity_path
 
         c = constraints()
         max_spawn = int(c.get("coordinator_max_spawn", 4))
         COORD_MODEL = "claude-opus-4-7"
+        run_id = session.run.run_id
+        project = session.run.project
+
+        def _ev(event_type: str, metadata: dict = None) -> None:
+            save_event(run_id, event_type, project=project, phase="coordinate", metadata=metadata)
+
+        def _activity(msg: str) -> None:
+            try:
+                import time as _t
+                activity_path(run_id).write_text(
+                    json.dumps({"tool": msg, "ts": _t.time(), "phase": "coordinate", "event_id": ""})
+                )
+            except Exception:
+                pass
 
         self._session_push(session, f"→ Coordinating: {session.goal}\n")
+        _ev("coordinator_started", {"goal": session.goal, "max_spawn": max_spawn})
+        _activity("planning")
 
         system = (
             "You are a task coordinator for an AI coding harness. "
@@ -410,7 +427,7 @@ class FlowOrchestrator:
             client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
             msg = metered_call(
                 client, COORD_MODEL,
-                run_id=session.run.run_id,
+                run_id=run_id,
                 purpose="coordinator-plan",
                 max_tokens=1024,
                 system=system,
@@ -422,15 +439,23 @@ class FlowOrchestrator:
             match = re.search(r'\{.*\}', raw, re.DOTALL)
             if not match:
                 self._session_push(session, "✗ No JSON plan found in response\n")
+                _ev("coordinator_failed", {"reason": "no_json", "raw": raw[:500]})
+                set_run_status(run_id, RunStatus.failed)
                 with session.lock:
                     session.status = "failed"
                 return
 
             plan = json.loads(match.group())
             tasks = [t for t in plan.get("tasks", []) if t.get("goal", "").strip()][:max_spawn]
+            _ev("coordinator_plan_complete", {
+                "task_count": len(tasks),
+                "tasks": [{"goal": t["goal"][:80], "type": t.get("type", "executor")} for t in tasks],
+            })
 
             if not tasks:
                 self._session_push(session, "✗ Empty task list\n")
+                _ev("coordinator_failed", {"reason": "empty_tasks"})
+                set_run_status(run_id, RunStatus.failed)
                 with session.lock:
                     session.status = "failed"
                 return
@@ -443,11 +468,14 @@ class FlowOrchestrator:
                     session,
                     f"✗ API spend gate reached (${api_today:.4f} ≥ ${api_gate:.2f}) — not spawning\n",
                 )
+                _ev("coordinator_blocked", {"reason": "budget_gate", "spend": api_today, "gate": api_gate})
+                set_run_status(run_id, RunStatus.blocked)
                 with session.lock:
                     session.status = "failed"
                 return
 
             self._session_push(session, f"\n→ Spawning {len(tasks)} sub-agents:\n")
+            _activity("spawning")
             prefix_map = {"planner": "plan:", "reviewer": "review:", "executor": ""}
             for t in tasks:
                 goal_text = t["goal"].strip()
@@ -455,13 +483,18 @@ class FlowOrchestrator:
                 prefix = prefix_map.get(task_type, "")
                 full_goal = f"{prefix} {goal_text}".strip() if prefix else goal_text
                 sub = self._start_session(full_goal)
+                _ev("coordinator_spawn", {"sub_run_id": sub.run.run_id, "type": task_type, "goal": goal_text[:80]})
                 self._session_push(session, f"  [{sub.idx}] {task_type}: {goal_text[:60]}\n")
 
+            _ev("coordinator_done", {"spawned": len(tasks)})
+            set_run_status(run_id, RunStatus.complete)
             with session.lock:
                 session.status = "done"
 
         except Exception as e:
             self._session_push(session, f"✗ Coordinator error: {e}\n")
+            _ev("coordinator_failed", {"reason": "exception", "error": str(e)[:200]})
+            set_run_status(run_id, RunStatus.failed)
             with session.lock:
                 session.status = "failed"
 
