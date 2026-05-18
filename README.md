@@ -4,6 +4,12 @@ Personal AI dev harness. Each task gets an isolated worktree and runs `plan → 
 
 [Six casino games in 30 minutes](https://github.com/nazanindev/ai_1.0) — each one a parallel agent, each one its own pipeline.
 
+[FastAPI blog API](https://github.com/nazanindev/ai_1.1) — single agent, full CRUD across users / posts / tags with SQLAlchemy and pytest.
+
+[GitHub metrics service](https://github.com/nazanindev/ai_1.2) — coordinator spawned 4 parallel agents (repos, pulls, contributors, webhooks). First real test of the foundation-first spawn pattern.
+
+[ai_1.3](https://github.com/nazanindev/ai_1.3) — next.
+
 ![flow control room](docs/screenshot.png)
 
 ---
@@ -91,6 +97,7 @@ Type a task, press Enter. Prefix to route it:
 | _(none)_ | Sonnet | Full pipeline: plan → execute → verify → ship, reviewer auto-spawned |
 | `plan: <question>` | Opus | Interactive planner — stays alive, responds to follow-ups |
 | `review: <branch>` | Haiku | One-shot diff review |
+| `coord: <goal>` | Opus | Coordinator — decomposes goal into parallel sub-agents using foundation-first pattern |
 
 ### Commands
 
@@ -116,6 +123,12 @@ flow ship                    # verify → commit → PR
 flow check                   # AI review of local diff
 flow ci-review --pr 42       # for GitHub Actions
 ```
+
+---
+
+## Design
+
+See [`docs/tradeoffs.md`](docs/tradeoffs.md) for the architectural decisions behind event sourcing, SQLite WAL, hook enforcement, and the coordinator spawn patterns.
 
 ---
 
