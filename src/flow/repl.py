@@ -220,13 +220,13 @@ class FlowOrchestrator:
             session_type = "reviewer"
             display_goal = goal[7:].strip()
             model_override = "claude-haiku-4-5-20251001"
-        elif lower.startswith("coord:") or lower.startswith("coord "):
-            session_type = "coordinator"
-            display_goal = goal[6:].strip()
+        elif lower.startswith("dispatch:") or lower.startswith("dispatch "):
+            session_type = "dispatcher"
+            display_goal = goal[9:].strip()
             model_override = "claude-opus-4-7"
 
-        # Coordinator and reviewer sessions don't need an isolated worktree
-        if session_type in ("reviewer", "coordinator"):
+        # Dispatcher and reviewer sessions don't need an isolated worktree
+        if session_type in ("reviewer", "dispatcher"):
             cwd = self._git_root()
             branch = self.branch
         else:
@@ -257,8 +257,8 @@ class FlowOrchestrator:
                 self._planner_worker(session)
             elif session.session_type == "reviewer":
                 self._reviewer_worker(session)
-            elif session.session_type == "coordinator":
-                self._coordinator_worker(session)
+            elif session.session_type == "dispatcher":
+                self._dispatcher_worker(session)
             else:
                 self._executor_worker(session)
         except SystemExit:
@@ -390,14 +390,14 @@ class FlowOrchestrator:
         with session.lock:
             session.status = "done"
 
-    def _coordinator_worker(self, session: AgentSession) -> None:
+    def _dispatcher_worker(self, session: AgentSession) -> None:
         """Plan via Opus, then spawn sub-agents for each task in the plan."""
         import anthropic
         from flow.billing import metered_call
         from flow.tracker import save_event, set_run_status, RunStatus, activity_path
 
         c = constraints()
-        max_spawn = int(c.get("coordinator_max_spawn", 4))
+        max_spawn = int(c.get("dispatcher_max_spawn", 4))
         COORD_MODEL = "claude-opus-4-7"
         run_id = session.run.run_id
         project = session.run.project
@@ -414,12 +414,12 @@ class FlowOrchestrator:
             except Exception:
                 pass
 
-        self._session_push(session, f"→ Coordinating: {session.goal}\n")
+        self._session_push(session, f"→ Dispatching: {session.goal}\n")
         _ev("coordinator_started", {"goal": session.goal, "max_spawn": max_spawn})
         _activity("planning")
 
         system = (
-            "You are a task coordinator for an AI coding harness. "
+            "You are a task dispatcher for an AI coding harness. "
             "Each task runs as an isolated agent in its own git worktree and opens a PR. "
             "PRs are merged sequentially — merge conflicts destroy the output.\n\n"
             "To prevent conflicts, use a FOUNDATION-FIRST pattern when tasks share infrastructure:\n"

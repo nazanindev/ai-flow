@@ -40,8 +40,8 @@ auto_remediate_max_tries: 2           # cap before surfacing failure to user
 api_spend_gate_usd: 1.00
 
 # ── Coordinator ───────────────────────────────────────────────────────────────
-# Max sub-agents a coord: session may spawn. Blocked by api_spend_gate_usd.
-coordinator_max_spawn: 4
+# Max sub-agents a dispatch: session may spawn. Blocked by api_spend_gate_usd.
+dispatcher_max_spawn: 4
 
 # ── Agent spawn policy ────────────────────────────────────────────────────────
 # smart: classify agents by tool capability + spend tier (recommended)
