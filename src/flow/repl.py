@@ -274,6 +274,14 @@ class FlowOrchestrator:
             from flow.tracker import set_run_status, RunStatus
             set_run_status(session.run.run_id, RunStatus.failed)
             self._remove_worktree(session)
+        else:
+            # Worker returned normally — reviewer and dispatcher don't always call
+            # set_run_status themselves, so ensure DB is consistent here.
+            from flow.tracker import set_run_status, RunStatus
+            with session.lock:
+                if session.status == "running":
+                    session.status = "done"
+            set_run_status(session.run.run_id, RunStatus.complete)
 
     def _executor_worker(self, session: AgentSession) -> None:
         """Standard pipeline: plan → execute → verify → fix → ship."""
@@ -922,6 +930,7 @@ class FlowOrchestrator:
         env["AP_ACTIVE"] = "1"
         env["AP_FLOW_HEADLESS"] = "1"
         env["AP_NO_SPAWN"] = "1" if self.no_agents else env.get("AP_NO_SPAWN", "0")
+        env["AP_RUN_ID"] = session.run.run_id
         if os.getenv("AP_FORCE_API_KEY") != "1":
             env.pop("ANTHROPIC_API_KEY", None)
 
