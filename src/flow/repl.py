@@ -837,9 +837,35 @@ class FlowOrchestrator:
 
         pr_match = re.search(r"https?://github\.com/\S+/pull/\d+", ship_output)
         if pr_match:
+            pr_url = pr_match.group(0)
             with session.lock:
-                session.pr_url = pr_match.group(0)
-                session.last_line = f"PR: {session.pr_url}"
+                session.pr_url = pr_url
+                session.last_line = f"PR: {pr_url}"
+            self._ci_review(pr_url, session)
+
+    def _ci_review(self, pr_url: str, session: AgentSession) -> None:
+        """Run flow ci-review --pr N after ship, post findings to GH, show summary in TUI."""
+        if not os.getenv("ANTHROPIC_API_KEY"):
+            return
+        pr_num = pr_url.rstrip("/").split("/")[-1]
+        self._session_push(session, f"→ CI review on PR #{pr_num}...\n")
+        result = subprocess.run(
+            ["flow", "ci-review", "--pr", pr_num],
+            cwd=str(session.cwd),
+            capture_output=True, text=True,
+            env={**os.environ, "AP_ACTIVE": "0"},
+        )
+        output = (result.stdout + result.stderr).strip()
+        # Strip ANSI escape codes so TUI RichLog shows clean text
+        ansi_re = re.compile(r"\x1b\[[0-9;]*[mGKH]")
+        clean = ansi_re.sub("", output)
+        # Surface the most informative lines: found count + final verdict
+        useful = [
+            l for l in clean.splitlines()
+            if any(kw in l for kw in ("found:", "blocker", "posted", "Looks good", "##", "Review"))
+        ]
+        summary = "\n".join(useful[-6:]) if useful else clean[-300:]
+        self._session_push(session, summary + "\n")
 
     def _spawn_reviewer(self, branch: str, pr_url: str = "") -> AgentSession:
         """Auto-spawn a reviewer session after a branch ships."""
