@@ -164,52 +164,29 @@ class SessionPane(Vertical):
             pass
 
 
-# ── Paste modal ───────────────────────────────────────────────────────────────
+# ── Submit-on-enter TextArea ──────────────────────────────────────────────────
 
-class PasteModal(Screen):
-    """Multi-line text overlay — paste a block, Ctrl+Enter to submit, Esc to cancel."""
+class SubmitArea(TextArea):
+    """TextArea that submits on Enter so paste works naturally.
 
-    BINDINGS = [
-        Binding("ctrl+enter", "submit", "Submit", show=True),
-        Binding("escape", "cancel", "Cancel", show=True),
-    ]
-
-    DEFAULT_CSS = """
-    PasteModal {
-        align: center middle;
-    }
-    PasteModal > Vertical {
-        width: 80%;
-        max-width: 100;
-        height: 16;
-        border: solid $accent;
-        background: $surface;
-        padding: 1 2;
-    }
-    PasteModal > Vertical > Label {
-        color: $text-muted;
-        margin-bottom: 1;
-    }
-    PasteModal > Vertical > TextArea {
-        height: 1fr;
-        border: none;
-    }
+    Replaces Input in the input bar. Paste lands multi-line, Enter sends it.
     """
 
-    def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Label("Ctrl+Enter to submit · Esc to cancel")
-            yield TextArea(id="paste-area")
+    class Submitted(TextArea.Changed):
+        """Posted when the user presses Enter to submit."""
+        def __init__(self, area: "SubmitArea", value: str) -> None:
+            super().__init__(area, area.text)
+            self.value = value
 
-    def on_mount(self) -> None:
-        self.query_one("#paste-area", TextArea).focus()
+    BINDINGS = [
+        Binding("enter", "submit_text", "Submit", show=False),
+    ]
 
-    def action_submit(self) -> None:
-        text = self.query_one("#paste-area", TextArea).text.strip()
-        self.dismiss(text or None)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
+    def action_submit_text(self) -> None:
+        text = self.text.strip()
+        if text:
+            self.post_message(self.Submitted(self, text))
+            self.load_text("")
 
 
 # ── Drill-down screen ─────────────────────────────────────────────────────────
@@ -219,7 +196,6 @@ class DrillDownScreen(Screen):
 
     BINDINGS = [
         Binding("escape", "pop_screen", "Back"),
-        Binding("ctrl+e", "open_paste", "Paste block", show=True),
     ]
 
     DEFAULT_CSS = """
@@ -235,8 +211,12 @@ class DrillDownScreen(Screen):
     DrillDownScreen > RichLog {
         height: 1fr;
     }
-    DrillDownScreen > Input {
+    DrillDownScreen > SubmitArea {
         dock: bottom;
+        height: 3;
+        border: none;
+        background: $surface;
+        padding: 0 1;
     }
     """
 
@@ -255,18 +235,7 @@ class DrillDownScreen(Screen):
             classes="drill-header",
         )
         yield RichLog(id="drill-log", highlight=False, markup=False, wrap=True)
-        yield Input(placeholder="/prompt <msg> or plain text to inject · Esc to return")
-
-    def on_mount(self) -> None:
-        log = self.query_one("#drill-log", RichLog)
-        buf = ""
-        for chunk in self.session.output_history:
-            buf += chunk
-            while "\n" in buf:
-                line, buf = buf.split("\n", 1)
-                log.write(line)
-        self._drill_buf = buf
-        self._start_drain()
+        yield SubmitArea(show_line_numbers=False, language=None, id="drill-input")
 
     def _start_drain(self) -> None:
         def _drain():
@@ -295,38 +264,40 @@ class DrillDownScreen(Screen):
     def on_unmount(self) -> None:
         self._drain_stop.set()
 
+    def on_mount(self) -> None:
+        log = self.query_one("#drill-log", RichLog)
+        buf = ""
+        for chunk in self.session.output_history:
+            buf += chunk
+            while "\n" in buf:
+                line, buf = buf.split("\n", 1)
+                log.write(line)
+        self._drill_buf = buf
+        self._start_drain()
+        self.query_one("#drill-input", SubmitArea).focus()
+
     def action_pop_screen(self) -> None:
         self.app.pop_screen()
 
-    def action_open_paste(self) -> None:
-        def _handle(text: Optional[str]) -> None:
-            if text:
-                self.session.inject_queue.put(text)
-                log = self.query_one("#drill-log", RichLog)
-                log.write(f"→ injected {len(text)} chars\n")
-        self.app.push_screen(PasteModal(), _handle)
-
-    @on(Input.Submitted)
-    def on_input(self, event: Input.Submitted) -> None:
+    @on(SubmitArea.Submitted, "#drill-input")
+    def on_drill_input(self, event: SubmitArea.Submitted) -> None:
         text = event.value.strip()
-        event.input.clear()
         if not text or text in ("/back", "b"):
             self.app.pop_screen()
             return
         if text.startswith("/stop"):
             self.orchestrator._stop_session(self.session.idx)
-            log = self.query_one("#drill-log", RichLog)
-            log.write("→ stop signal sent\n")
+            self.query_one("#drill-log", RichLog).write("→ stop signal sent\n")
             return
         if text.startswith("/") and not text.startswith("/prompt "):
-            log = self.query_one("#drill-log", RichLog)
-            log.write("drill-down: /prompt <msg> to inject · /stop · /back to exit\n")
+            self.query_one("#drill-log", RichLog).write(
+                "drill-down: /prompt <msg> to inject · /stop · /back to exit\n"
+            )
             return
         msg = text[8:].strip() if text.startswith("/prompt ") else text
         if msg:
             self.session.inject_queue.put(msg)
-            log = self.query_one("#drill-log", RichLog)
-            log.write(f"→ [queued] {msg}\n")
+            self.query_one("#drill-log", RichLog).write(f"→ [queued] {msg[:80]}{'…' if len(msg) > 80 else ''}\n")
 
 
 # ── Status header ─────────────────────────────────────────────────────────────
@@ -408,15 +379,15 @@ class FlowApp(App):
         padding: 0 1;
         background: $surface;
     }
-    #input-bar Input {
+    #input-bar SubmitArea {
         border: none;
         background: $surface;
+        padding: 0;
     }
     """
 
     BINDINGS = [
         Binding("ctrl+q", "quit_flow", "Quit", show=True),
-        Binding("ctrl+e", "open_paste", "Paste block", show=True),
     ]
 
     def __init__(self, orchestrator: "FlowOrchestrator") -> None:
@@ -430,15 +401,12 @@ class FlowApp(App):
         yield EmptyState(id="empty-state")
         yield SessionGrid(id="session-grid")
         with Vertical(id="input-bar"):
-            yield Input(
-                placeholder="Type a task, or /help for commands",
-                id="main-input",
-            )
+            yield SubmitArea(show_line_numbers=False, language=None, id="main-input")
 
     def on_mount(self) -> None:
         self.query_one("#session-grid").display = False
         self._refresh_timer = self.set_interval(0.25, self._tick)
-        self.query_one("#main-input", Input).focus()
+        self.query_one("#main-input", SubmitArea).focus()
 
         # Hook health warning
         from flow.commands.doctor import hook_health_ok, hook_health_one_liner
@@ -535,23 +503,9 @@ class FlowApp(App):
 
     # ── Input handling ────────────────────────────────────────────────────────
 
-    def action_open_paste(self) -> None:
-        def _handle(text: Optional[str]) -> None:
-            if not text:
-                return
-            self.query_one("#main-input", Input).clear()
-            if text.startswith("/"):
-                self._handle_slash(text)
-            elif not self.orchestrator._try_dispatch_flow_cmd(text):
-                session = self.orchestrator._start_session(text)
-                self.add_session_pane(session)
-                self.notify(f"Session {session.idx} started on {session.branch}", timeout=3)
-        self.push_screen(PasteModal(), _handle)
-
-    @on(Input.Submitted, "#main-input")
-    def on_main_input(self, event: Input.Submitted) -> None:
+    @on(SubmitArea.Submitted, "#main-input")
+    def on_main_input(self, event: SubmitArea.Submitted) -> None:
         text = event.value.strip()
-        event.input.clear()
         if not text:
             return
         if text.startswith("/"):
