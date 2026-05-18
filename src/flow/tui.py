@@ -16,10 +16,11 @@ from textual import on, work
 from textual.app import App, ComposeResult
 from textual.message import Message
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, ScrollableContainer
+from textual.containers import Vertical
 from textual.css.query import NoMatches
 from textual.reactive import reactive
 from textual.screen import Screen
+from textual.widget import Widget
 from textual.widgets import Footer, Header, Input, Label, RichLog, Static, TextArea
 
 if TYPE_CHECKING:
@@ -62,7 +63,7 @@ class SessionPane(Vertical):
         self._line_buf = ""
 
     def compose(self) -> ComposeResult:
-        type_labels = {"executor": "ex", "planner": "pl", "reviewer": "rv"}
+        type_labels = {"executor": "ex", "planner": "pl", "reviewer": "rv", "coordinator": "co"}
         tag = type_labels.get(self.session.session_type, self.session.session_type[:2])
         yield Label(
             f"[bold][{self.session.idx}][/bold] {tag} · {self.session.goal[:35]}",
@@ -95,7 +96,7 @@ class SessionPane(Vertical):
     def refresh_title(self) -> None:
         try:
             label = self.query_one(".pane-title", Label)
-            type_labels = {"executor": "ex", "planner": "pl", "reviewer": "rv"}
+            type_labels = {"executor": "ex", "planner": "pl", "reviewer": "rv", "coordinator": "co"}
             tag = type_labels.get(self.session.session_type, self.session.session_type[:2])
             with self.session.lock:
                 st = self.session.status
@@ -342,12 +343,23 @@ class FlowHeader(Static):
 
 # ── Session grid ──────────────────────────────────────────────────────────────
 
-class SessionGrid(Horizontal):
+class SessionGrid(Widget):
     DEFAULT_CSS = """
     SessionGrid {
         height: 1fr;
+        layout: grid;
+        grid-size: 1;
+    }
+    SessionGrid.multi {
+        grid-size: 2;
     }
     """
+
+    def update_layout(self, count: int) -> None:
+        if count >= 3:
+            self.add_class("multi")
+        else:
+            self.remove_class("multi")
 
 
 # ── Empty state ───────────────────────────────────────────────────────────────
@@ -367,6 +379,7 @@ class EmptyState(Static):
             "Type a task to start.\n"
             "  plan: <question>   — interactive planner (opus)\n"
             "  review: <branch>   — one-shot code review (haiku)\n"
+            "  coord: <goal>      — spawn multiple agents (coordinator)\n"
             "  /dismiss N         — remove a done/failed session\n"
             "  /help              — all commands"
         )
@@ -508,6 +521,7 @@ class FlowApp(App):
         grid.display = True
         pane = SessionPane(session)
         grid.mount(pane)
+        grid.update_layout(len(self.orchestrator.sessions))
 
     # ── Input handling ────────────────────────────────────────────────────────
 
@@ -599,7 +613,7 @@ class FlowApp(App):
             self.notify(
                 "/view N  /stop [N]  /dismiss N  /prompt N <msg>  /model opus|sonnet|haiku\n"
                 "/no-agents  /budget $X  /test-flow  /sessions  /status  /quit\n"
-                "Prefix tasks: plan: …  review: …",
+                "Prefix tasks: plan: …  review: …  coord: …",
                 title="Commands",
                 timeout=10,
             )

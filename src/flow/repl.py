@@ -216,9 +216,13 @@ class FlowOrchestrator:
             session_type = "reviewer"
             display_goal = goal[7:].strip()
             model_override = "claude-haiku-4-5-20251001"
+        elif lower.startswith("coord:") or lower.startswith("coord "):
+            session_type = "coordinator"
+            display_goal = goal[6:].strip()
+            model_override = "claude-opus-4-7"
 
-        # Reviewer sessions don't need an isolated worktree — they only read git history
-        if session_type == "reviewer":
+        # Coordinator and reviewer sessions don't need an isolated worktree
+        if session_type in ("reviewer", "coordinator"):
             cwd = self._git_root()
             branch = self.branch
         else:
@@ -249,6 +253,8 @@ class FlowOrchestrator:
                 self._planner_worker(session)
             elif session.session_type == "reviewer":
                 self._reviewer_worker(session)
+            elif session.session_type == "coordinator":
+                self._coordinator_worker(session)
             else:
                 self._executor_worker(session)
         except SystemExit:
@@ -373,6 +379,91 @@ class FlowOrchestrator:
 
         with session.lock:
             session.status = "done"
+
+    def _coordinator_worker(self, session: AgentSession) -> None:
+        """Plan via Opus, then spawn sub-agents for each task in the plan."""
+        import anthropic
+        from flow.billing import metered_call
+
+        c = constraints()
+        max_spawn = int(c.get("coordinator_max_spawn", 4))
+        COORD_MODEL = "claude-opus-4-7"
+
+        self._session_push(session, f"→ Coordinating: {session.goal}\n")
+
+        system = (
+            "You are a task coordinator for an AI coding harness. "
+            "Decompose the goal into parallel, independently-executable sub-tasks.\n"
+            "Output ONLY valid JSON:\n"
+            '{"tasks": [{"goal": "...", "type": "executor|planner|reviewer"}]}\n\n'
+            f"Rules:\n"
+            f"- Maximum {max_spawn} tasks\n"
+            "- executor: full pipeline (plan→execute→verify→ship) — use for implementation\n"
+            "- planner: interactive planning only — use for design/architecture questions\n"
+            "- reviewer: one-shot code review — use for review tasks\n"
+            "- Tasks must be independent (run in parallel, no inter-dependencies)\n"
+            "- Each goal must be concrete and actionable\n"
+            "- Output JSON only, no markdown"
+        )
+
+        try:
+            client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+            msg = metered_call(
+                client, COORD_MODEL,
+                run_id=session.run.run_id,
+                purpose="coordinator-plan",
+                max_tokens=1024,
+                system=system,
+                messages=[{"role": "user", "content": session.goal}],
+            )
+            raw = msg.content[0].text if msg.content else ""
+            self._session_push(session, f"{raw}\n")
+
+            match = re.search(r'\{.*\}', raw, re.DOTALL)
+            if not match:
+                self._session_push(session, "✗ No JSON plan found in response\n")
+                with session.lock:
+                    session.status = "failed"
+                return
+
+            plan = json.loads(match.group())
+            tasks = [t for t in plan.get("tasks", []) if t.get("goal", "").strip()][:max_spawn]
+
+            if not tasks:
+                self._session_push(session, "✗ Empty task list\n")
+                with session.lock:
+                    session.status = "failed"
+                return
+
+            # Budget gate before spawning
+            api_gate = float(os.getenv("AP_BUDGET_USD") or c.get("api_spend_gate_usd", 1.0))
+            api_today = get_api_spend_today(self.project)
+            if api_today >= api_gate:
+                self._session_push(
+                    session,
+                    f"✗ API spend gate reached (${api_today:.4f} ≥ ${api_gate:.2f}) — not spawning\n",
+                )
+                with session.lock:
+                    session.status = "failed"
+                return
+
+            self._session_push(session, f"\n→ Spawning {len(tasks)} sub-agents:\n")
+            prefix_map = {"planner": "plan:", "reviewer": "review:", "executor": ""}
+            for t in tasks:
+                goal_text = t["goal"].strip()
+                task_type = t.get("type", "executor")
+                prefix = prefix_map.get(task_type, "")
+                full_goal = f"{prefix} {goal_text}".strip() if prefix else goal_text
+                sub = self._start_session(full_goal)
+                self._session_push(session, f"  [{sub.idx}] {task_type}: {goal_text[:60]}\n")
+
+            with session.lock:
+                session.status = "done"
+
+        except Exception as e:
+            self._session_push(session, f"✗ Coordinator error: {e}\n")
+            with session.lock:
+                session.status = "failed"
 
     def _drain_inject(self, session: AgentSession) -> None:
         """Process any queued /prompt messages after the current turn."""

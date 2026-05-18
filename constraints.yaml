@@ -38,6 +38,10 @@ auto_remediate_max_tries: 2           # cap before surfacing failure to user
 # These hit ANTHROPIC_API_KEY and cost real money.
 api_spend_gate_usd: 1.00
 
+# ── Coordinator ───────────────────────────────────────────────────────────────
+# Max sub-agents a coord: session may spawn. Blocked by api_spend_gate_usd.
+coordinator_max_spawn: 4
+
 # ── Agent spawn policy ────────────────────────────────────────────────────────
 # smart: classify agents by tool capability + spend tier (recommended)
 #   - read-only agents (no Write/Edit tools): allowed in any phase, any spend
