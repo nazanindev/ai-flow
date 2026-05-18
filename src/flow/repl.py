@@ -1066,7 +1066,6 @@ class FlowOrchestrator:
 
         if user_stopped:
             session.run.status = RunStatus.blocked
-            session.run.claude_session_id = ""
             save_run(session.run)
             return ""
 
@@ -1248,9 +1247,8 @@ class FlowOrchestrator:
             r = load_run(run_id)
             if not r:
                 console.print(f"[red]Run {run_id} not found.[/red]")
-                return
-            self._attach_existing_run(r)
-            return
+                return None
+            return self._attach_existing_run(r)
 
         runs = [r for r in get_recent_runs(limit=10) if r["status"] != RunStatus.complete.value]
         if not runs:
@@ -1272,8 +1270,8 @@ class FlowOrchestrator:
         r = load_run(run_id)
         if not r:
             console.print(f"[red]Run {run_id} not found.[/red]")
-            return
-        self._attach_existing_run(r)
+            return None
+        return self._attach_existing_run(r)
 
     def _attach_existing_run(self, run: RunState) -> None:
         git_root = self._git_root()
@@ -1307,6 +1305,7 @@ class FlowOrchestrator:
         self.sessions.append(session)
         session.thread.start()
         console.print(f"[green]✓ Resumed: {run.goal[:55]}[/green]")
+        return session
 
     def _show_status(self) -> None:
         api_today = get_api_spend_today(self.project)
