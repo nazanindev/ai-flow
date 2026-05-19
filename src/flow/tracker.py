@@ -576,7 +576,7 @@ def get_recent_runs(project: Optional[str] = None, limit: int = 10) -> list:
     base = """
         SELECT r.run_id, r.goal, r.phase, r.status, r.cost_usd, r.updated_at,
                r.subscription_msgs, r.subscription_tokens_in, r.subscription_tokens_out,
-               r.project, r.branch, r.created_at,
+               r.project, r.branch, r.created_at, r.pr_url,
                COALESCE(b.cnt, 0) AS block_count
         FROM runs r
         LEFT JOIN (
@@ -598,7 +598,7 @@ def get_recent_runs(project: Optional[str] = None, limit: int = 10) -> list:
     cols = [
         "run_id", "goal", "phase", "status", "cost_usd", "updated_at",
         "subscription_msgs", "subscription_tokens_in", "subscription_tokens_out",
-        "project", "branch", "created_at", "block_count",
+        "project", "branch", "created_at", "pr_url", "block_count",
     ]
     return [dict(zip(cols, r)) for r in rows]
 

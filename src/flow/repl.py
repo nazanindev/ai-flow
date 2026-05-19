@@ -144,7 +144,7 @@ class FlowOrchestrator:
         """Create a git worktree for a new session. Returns (path, branch_name).
 
         If base_branch is given, the new branch starts from that branch instead of HEAD.
-        Used by the coordinator to start feature agents from the foundation branch.
+        Used by the dispatcher to start feature agents from the foundation branch.
         """
         slug = re.sub(r"[^a-z0-9]+", "-", goal.lower())[:25].strip("-")
         name = f"flow-{slug}-{uuid.uuid4().hex[:4]}"
@@ -170,9 +170,9 @@ class FlowOrchestrator:
 
     def dismiss_session(self, idx: int) -> str:
         """Remove a done/failed session and clean up its worktree. Returns error string or ''."""
-        if idx < 1 or idx > len(self.sessions):
+        session = next((s for s in self.sessions if s.idx == idx), None)
+        if session is None:
             return f"No session {idx}"
-        session = self.sessions[idx - 1]
         with session.lock:
             status = session.status
         if status == "running":
@@ -274,6 +274,14 @@ class FlowOrchestrator:
             from flow.tracker import set_run_status, RunStatus
             set_run_status(session.run.run_id, RunStatus.failed)
             self._remove_worktree(session)
+        else:
+            # Worker returned normally — reviewer and dispatcher don't always call
+            # set_run_status themselves, so ensure DB is consistent here.
+            from flow.tracker import set_run_status, RunStatus
+            with session.lock:
+                if session.status == "running":
+                    session.status = "done"
+            set_run_status(session.run.run_id, RunStatus.complete)
 
     def _executor_worker(self, session: AgentSession) -> None:
         """Standard pipeline: plan → execute → verify → fix → ship."""
@@ -323,14 +331,12 @@ class FlowOrchestrator:
                 continue
 
     def _reviewer_worker(self, session: AgentSession) -> None:
-        """One-shot AI code review of a branch or HEAD."""
+        """Subscription-based code review via Claude Code (read-only tools)."""
         target = session.goal.strip() or "HEAD"
         self._session_push(session, f"→ Reviewing {target}...\n")
 
+        # Get diff — prefer gh pr diff when a PR URL is set
         diff = ""
-
-        # Prefer gh pr diff when a PR URL is available — avoids local git diff
-        # failing when the branch lives in a different worktree or is already merged.
         if session.pr_url:
             pr_num = session.pr_url.rstrip("/").split("/")[-1]
             r = subprocess.run(
@@ -361,34 +367,41 @@ class FlowOrchestrator:
                 session.status = "done"
             return
 
-        try:
-            from flow.commands.check import run_check
-            report = run_check(diff_text=diff)
-            overall = report.get("overall", "?")
-            blockers = report.get("blocker_count", 0)
-            warnings_ = report.get("warning_count", 0)
-            self._session_push(
-                session,
-                f"Overall: {overall} | Blockers: {blockers} | Warnings: {warnings_}\n"
-                f"{report.get('summary', '')}\n",
-            )
-            for f in report.get("findings", []):
-                loc = f.get("file", "") or "unknown"
-                if f.get("line"):
-                    loc = f"{loc}:{f['line']}"
-                self._session_push(
-                    session,
-                    f"  [{f['severity']}] {f['title']} — {loc}\n"
-                    f"    {f.get('detail', '')}\n"
-                    f"    → {f.get('action', '')}\n",
-                )
-            with session.lock:
-                session.last_line = f"{overall} | {blockers}B {warnings_}W"
-        except Exception as e:
-            self._session_push(session, f"Review failed: {e}\n")
+        pr_hint = f"\nPR: {session.pr_url}" if session.pr_url else ""
+        review_prompt = f"""You are a thorough, skeptical code reviewer. Find real problems — not style nitpicks.
 
-        with session.lock:
-            session.status = "done"
+Read the diff carefully. Use Read, Grep, and Glob to explore relevant files and understand context before forming conclusions. Look at callers, tests, and related modules.{pr_hint}
+
+**Flag only real issues:**
+- Bugs: null/undefined access, wrong comparisons, off-by-one, type mismatches, missing awaits
+- Security: unvalidated input, injection risks, auth bypass, exposed secrets, missing CSRF, path traversal
+- Missing error handling: uncaught exceptions, unhandled rejections, missing null checks, swallowed errors
+- Race conditions: shared mutable state without locks, TOCTOU vulnerabilities
+- Logic errors: wrong conditions, incorrect algorithm, silent data loss, broken edge cases
+- Broken contracts: API changes without updating callers, schema changes without migrations, removed exports
+
+**Do not flag:** style, formatting, variable naming, line length, import order, minor refactors, personal preference.
+
+**For each real issue, write:**
+`[BLOCKER]` `file:line` — clear description of the problem and why it matters.
+Suggested fix: specific, actionable recommendation.
+
+If there's nothing real to flag: write "LGTM — no issues found."
+
+---
+
+Diff to review:
+```diff
+{diff[:14000]}
+```
+"""
+
+        self._launch_claude(
+            "", session,
+            override_message=review_prompt,
+            allowed_tools=["Read", "Grep", "Glob"],
+            ap_active=False,
+        )
 
     def _dispatcher_worker(self, session: AgentSession) -> None:
         """Plan via Opus, then spawn sub-agents for each task in the plan."""
@@ -415,7 +428,7 @@ class FlowOrchestrator:
                 pass
 
         self._session_push(session, f"→ Dispatching: {session.goal}\n")
-        _ev("coordinator_started", {"goal": session.goal, "max_spawn": max_spawn})
+        _ev("dispatcher_started", {"goal": session.goal, "max_spawn": max_spawn})
         _activity("planning")
 
         system = (
@@ -446,18 +459,26 @@ class FlowOrchestrator:
             msg = metered_call(
                 client, COORD_MODEL,
                 run_id=run_id,
-                purpose="coordinator-plan",
-                max_tokens=1500,
+                purpose="dispatcher-plan",
+                max_tokens=4096,
                 system=system,
                 messages=[{"role": "user", "content": session.goal}],
             )
             raw = msg.content[0].text if msg.content else ""
             self._session_push(session, f"{raw}\n")
 
+            if msg.stop_reason == "max_tokens":
+                self._session_push(session, "✗ Dispatcher plan truncated — spawn plan too long for token budget\n")
+                _ev("dispatcher_failed", {"reason": "max_tokens", "raw": raw[:500]})
+                set_run_status(run_id, RunStatus.failed)
+                with session.lock:
+                    session.status = "failed"
+                return
+
             match = re.search(r'\{.*\}', raw, re.DOTALL)
             if not match:
                 self._session_push(session, "✗ No JSON plan found in response\n")
-                _ev("coordinator_failed", {"reason": "no_json", "raw": raw[:500]})
+                _ev("dispatcher_failed", {"reason": "no_json", "raw": raw[:500]})
                 set_run_status(run_id, RunStatus.failed)
                 with session.lock:
                     session.status = "failed"
@@ -467,7 +488,7 @@ class FlowOrchestrator:
             tasks = [t for t in plan.get("tasks", []) if t.get("goal", "").strip()][:max_spawn]
             foundation_spec = plan.get("foundation")
 
-            _ev("coordinator_plan_complete", {
+            _ev("dispatcher_plan_complete", {
                 "has_foundation": bool(foundation_spec),
                 "task_count": len(tasks),
                 "tasks": [{"goal": t["goal"][:80], "type": t.get("type", "executor")} for t in tasks],
@@ -475,7 +496,7 @@ class FlowOrchestrator:
 
             if not tasks and not foundation_spec:
                 self._session_push(session, "✗ Empty plan\n")
-                _ev("coordinator_failed", {"reason": "empty_plan"})
+                _ev("dispatcher_failed", {"reason": "empty_plan"})
                 set_run_status(run_id, RunStatus.failed)
                 with session.lock:
                     session.status = "failed"
@@ -489,7 +510,7 @@ class FlowOrchestrator:
                     session,
                     f"✗ API spend gate reached (${api_today:.4f} ≥ ${api_gate:.2f}) — not spawning\n",
                 )
-                _ev("coordinator_blocked", {"reason": "budget_gate", "spend": api_today, "gate": api_gate})
+                _ev("dispatcher_blocked", {"reason": "budget_gate", "spend": api_today, "gate": api_gate})
                 set_run_status(run_id, RunStatus.blocked)
                 with session.lock:
                     session.status = "failed"
@@ -502,7 +523,7 @@ class FlowOrchestrator:
                 self._session_push(session, f"\n→ Phase 1 — foundation: {foundation_goal[:70]}\n")
                 _activity("spawning foundation")
                 foundation_session = self._start_session(foundation_goal)
-                _ev("coordinator_spawn", {
+                _ev("dispatcher_spawn", {
                     "sub_run_id": foundation_session.run.run_id,
                     "type": "foundation",
                     "goal": foundation_goal[:80],
@@ -517,11 +538,11 @@ class FlowOrchestrator:
                     if st == "done":
                         feature_base_branch = foundation_session.branch
                         self._session_push(session, f"  ✓ foundation complete (branch: {feature_base_branch})\n")
-                        _ev("coordinator_foundation_done", {"branch": feature_base_branch})
+                        _ev("dispatcher_foundation_done", {"branch": feature_base_branch})
                         break
                     elif st == "failed":
                         self._session_push(session, "  ✗ foundation failed — aborting feature spawn\n")
-                        _ev("coordinator_failed", {"reason": "foundation_failed"})
+                        _ev("dispatcher_failed", {"reason": "foundation_failed"})
                         set_run_status(run_id, RunStatus.failed)
                         with session.lock:
                             session.status = "failed"
@@ -530,7 +551,7 @@ class FlowOrchestrator:
                     time.sleep(3)
                 else:
                     self._session_push(session, "  ✗ foundation timed out\n")
-                    _ev("coordinator_failed", {"reason": "foundation_timeout"})
+                    _ev("dispatcher_failed", {"reason": "foundation_timeout"})
                     set_run_status(run_id, RunStatus.failed)
                     with session.lock:
                         session.status = "failed"
@@ -553,21 +574,21 @@ class FlowOrchestrator:
                     prefix = prefix_map.get(task_type, "")
                     full_goal = f"{prefix} {goal_text}".strip() if prefix else goal_text
                     sub = self._start_session(full_goal, base_branch=feature_base_branch)
-                    _ev("coordinator_spawn", {
+                    _ev("dispatcher_spawn", {
                         "sub_run_id": sub.run.run_id, "type": task_type,
                         "goal": t["goal"][:80], "owns": owns,
                         "base_branch": feature_base_branch,
                     })
                     self._session_push(session, f"  [{sub.idx}] {task_type}: {t['goal'][:60]}\n")
 
-            _ev("coordinator_done", {"foundation": bool(foundation_spec), "spawned": len(tasks)})
+            _ev("dispatcher_done", {"foundation": bool(foundation_spec), "spawned": len(tasks)})
             set_run_status(run_id, RunStatus.complete)
             with session.lock:
                 session.status = "done"
 
         except Exception as e:
             self._session_push(session, f"✗ Coordinator error: {e}\n")
-            _ev("coordinator_failed", {"reason": "exception", "error": str(e)[:200]})
+            _ev("dispatcher_failed", {"reason": "exception", "error": str(e)[:200]})
             set_run_status(run_id, RunStatus.failed)
             with session.lock:
                 session.status = "failed"
@@ -677,6 +698,35 @@ class FlowOrchestrator:
                 with session.lock:
                     session.run.phase = Phase.execute
                 self._session_push(session, "✓ Plan captured — executing\n")
+            else:
+                # No numbered steps found — re-prompt once explicitly
+                self._session_push(session, "⚠ No plan steps found — re-prompting for numbered plan\n")
+                retry_text = self._launch_claude(
+                    "Output a numbered plan for the task above. "
+                    "Format each step as: '1. description', '2. description', etc. "
+                    "One step per line. No prose before or after.",
+                    session,
+                )
+                parsed = self._parse_numbered_plan_steps(retry_text) if retry_text else []
+                if not parsed:
+                    parsed = self._parse_plan_from_file()
+                if parsed:
+                    set_plan_steps(session.run, parsed)
+                    updated = load_run(session.run.run_id)
+                    if updated:
+                        with session.lock:
+                            session.run = updated
+                    advance_phase(session.run, Phase.execute)
+                    with session.lock:
+                        session.run.phase = Phase.execute
+                    self._session_push(session, "✓ Plan captured — executing\n")
+                else:
+                    self._session_push(session, "✗ No plan produced — session ending without work\n")
+                    with session.lock:
+                        session.status = "failed"
+                    from flow.tracker import set_run_status, RunStatus
+                    set_run_status(session.run.run_id, RunStatus.failed)
+                    return response_text
 
         # Detect STEP_DONE markers in execute phase
         if session.run.phase == Phase.execute and session.run.plan_steps and response_text:
@@ -795,33 +845,60 @@ class FlowOrchestrator:
             with session.lock:
                 session.pr_url = pr_match.group(0)
                 session.last_line = f"PR: {session.pr_url}"
-            self._spawn_reviewer(session.branch, pr_url=session.pr_url)
 
-    def _spawn_reviewer(self, branch: str, pr_url: str = "") -> AgentSession:
-        """Auto-spawn a reviewer session after a branch ships."""
-        git_root = self._git_root()
+        c = constraints()
+        review_mode = c.get("auto_review", "local")
+        if review_mode in ("local", "both"):
+            self._spawn_reviewer(session)
+        if review_mode in ("gh", "both") and session.pr_url and os.getenv("ANTHROPIC_API_KEY"):
+            self._ci_review(session.pr_url, session)
+
+    def _ci_review(self, pr_url: str, session: AgentSession) -> None:
+        """Run flow ci-review --pr N after ship, post findings to GH, show summary in TUI."""
+        if not os.getenv("ANTHROPIC_API_KEY"):
+            return
+        pr_num = pr_url.rstrip("/").split("/")[-1]
+        self._session_push(session, f"→ CI review on PR #{pr_num}...\n")
+        result = subprocess.run(
+            ["flow", "ci-review", "--pr", pr_num],
+            cwd=str(session.cwd),
+            capture_output=True, text=True,
+            env={**os.environ, "AP_ACTIVE": "0"},
+        )
+        output = (result.stdout + result.stderr).strip()
+        # Strip ANSI escape codes so TUI RichLog shows clean text
+        ansi_re = re.compile(r"\x1b\[[0-9;]*[mGKH]")
+        clean = ansi_re.sub("", output)
+        # Surface the most informative lines: found count + final verdict
+        useful = [
+            l for l in clean.splitlines()
+            if any(kw in l for kw in ("found:", "blocker", "posted", "Looks good", "##", "Review"))
+        ]
+        summary = "\n".join(useful[-6:]) if useful else clean[-300:]
+        self._session_push(session, summary + "\n")
+
+    def _spawn_reviewer(self, parent: AgentSession) -> AgentSession:
+        """Spawn a read-only Claude Code reviewer session for a completed run."""
         init_db()
-        goal = branch
-        run = RunState(goal=goal, project=self.project, branch=self.branch)
+        goal = f"review: {parent.branch}"
+        run = RunState(goal=goal, project=self.project, branch=parent.branch)
         save_run(run)
         trace_run_started(run.run_id, run.project, run.branch, goal)
 
         idx = len(self.sessions) + 1
-        session = AgentSession(
+        rev = AgentSession(
             idx=idx, goal=goal, run=run,
-            project=self.project, branch=self.branch, cwd=git_root,
+            project=self.project, branch=parent.branch,
+            cwd=parent.cwd,
             session_type="reviewer",
-            model_override="claude-haiku-4-5-20251001",
         )
-        if pr_url:
-            session.pr_url = pr_url
-            session.output_queue.put(f"→ Reviewing PR: {pr_url}\n")
-        session.thread = threading.Thread(
-            target=self._session_worker, args=(session,), daemon=True,
+        rev.pr_url = parent.pr_url
+        rev.thread = threading.Thread(
+            target=self._session_worker, args=(rev,), daemon=True,
         )
-        self.sessions.append(session)
-        session.thread.start()
-        return session
+        self.sessions.append(rev)
+        rev.thread.start()
+        return rev
 
     def _auto_remediate_verify(self, output: str, tries_left: int, session: AgentSession) -> bool:
         if tries_left <= 0:
@@ -869,22 +946,32 @@ class FlowOrchestrator:
 
     # ── Claude subprocess ─────────────────────────────────────────────────────
 
-    def _launch_claude(self, task: str, session: AgentSession) -> str:
+    def _launch_claude(
+        self, task: str, session: AgentSession,
+        *,
+        override_message: str = None,
+        allowed_tools: list = None,
+        ap_active: bool = True,
+    ) -> str:
         model = session.model_override or self.model_override or model_for(session.run.phase, session.run.goal)
-        briefing = get_session_briefing(session.run, cwd=session.cwd)
-        directive = phase_directive(session.run)
 
-        initial_message = (
-            f"{briefing}\n"
-            f"**Instructions for this session:**\n{directive}\n\n"
-            f"---\n\n"
-            f"{task}"
-        )
+        if override_message is not None:
+            initial_message = override_message
+        else:
+            briefing = get_session_briefing(session.run, cwd=session.cwd)
+            directive = phase_directive(session.run)
+            initial_message = (
+                f"{briefing}\n"
+                f"**Instructions for this session:**\n{directive}\n\n"
+                f"---\n\n"
+                f"{task}"
+            )
 
         env = os.environ.copy()
-        env["AP_ACTIVE"] = "1"
+        env["AP_ACTIVE"] = "1" if ap_active else "0"
         env["AP_FLOW_HEADLESS"] = "1"
         env["AP_NO_SPAWN"] = "1" if self.no_agents else env.get("AP_NO_SPAWN", "0")
+        env["AP_RUN_ID"] = session.run.run_id
         if os.getenv("AP_FORCE_API_KEY") != "1":
             env.pop("ANTHROPIC_API_KEY", None)
 
@@ -902,10 +989,12 @@ class FlowOrchestrator:
             "--permission-mode", perm,
             "--max-turns", str(max_turns),
         ]
+        if allowed_tools:
+            cmd.extend(["--allowedTools", ",".join(allowed_tools)])
         if stream_enabled:
             cmd.extend(["--verbose", "--include-partial-messages"])
         sid = (session.run.claude_session_id or "").strip()
-        if sid:
+        if sid and override_message is None:
             cmd.extend(["--resume", sid])
 
         self._session_push(
@@ -1020,7 +1109,6 @@ class FlowOrchestrator:
 
         if user_stopped:
             session.run.status = RunStatus.blocked
-            session.run.claude_session_id = ""
             save_run(session.run)
             return ""
 
@@ -1163,10 +1251,11 @@ class FlowOrchestrator:
 
 
     def _stop_session(self, idx: Optional[int]) -> None:
-        targets = (
-            [self.sessions[idx - 1]] if idx and 1 <= idx <= len(self.sessions)
-            else [s for s in self.sessions if s.status == "running"]
-        )
+        if idx:
+            target = next((s for s in self.sessions if s.idx == idx), None)
+            targets = [target] if target else []
+        else:
+            targets = [s for s in self.sessions if s.status == "running"]
         if not targets:
             console.print("[dim]No running sessions.[/dim]")
             return
@@ -1185,10 +1274,10 @@ class FlowOrchestrator:
         if not msg:
             console.print("[red]Message cannot be empty.[/red]")
             return
-        if idx < 1 or idx > len(self.sessions):
+        session = next((s for s in self.sessions if s.idx == idx), None)
+        if session is None:
             console.print(f"[red]No session {idx}[/red]")
             return
-        session = self.sessions[idx - 1]
         with session.lock:
             if session.status != "running":
                 console.print(f"[yellow]Session {idx} is not running.[/yellow]")
@@ -1202,9 +1291,8 @@ class FlowOrchestrator:
             r = load_run(run_id)
             if not r:
                 console.print(f"[red]Run {run_id} not found.[/red]")
-                return
-            self._attach_existing_run(r)
-            return
+                return None
+            return self._attach_existing_run(r)
 
         runs = [r for r in get_recent_runs(limit=10) if r["status"] != RunStatus.complete.value]
         if not runs:
@@ -1226,8 +1314,8 @@ class FlowOrchestrator:
         r = load_run(run_id)
         if not r:
             console.print(f"[red]Run {run_id} not found.[/red]")
-            return
-        self._attach_existing_run(r)
+            return None
+        return self._attach_existing_run(r)
 
     def _attach_existing_run(self, run: RunState) -> None:
         git_root = self._git_root()
@@ -1261,6 +1349,7 @@ class FlowOrchestrator:
         self.sessions.append(session)
         session.thread.start()
         console.print(f"[green]✓ Resumed: {run.goal[:55]}[/green]")
+        return session
 
     def _show_status(self) -> None:
         api_today = get_api_spend_today(self.project)

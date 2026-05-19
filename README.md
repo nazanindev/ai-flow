@@ -92,9 +92,9 @@ Type a task, press Enter. Prefix to route it:
 
 | Prefix | Model | Behavior |
 |---|---|---|
-| _(none)_ | Sonnet | Full pipeline: plan → execute → verify → ship, reviewer auto-spawned |
+| _(none)_ | Sonnet | Full pipeline: plan → execute → verify → ship → review |
 | `plan: <question>` | Opus | Interactive planner — stays alive, responds to follow-ups |
-| `review: <branch>` | Haiku | One-shot diff review |
+| `review: <branch>` | Sonnet | One-shot diff review (Claude Code, subscription) |
 | `dispatch: <goal>` | Opus | Dispatcher — decomposes goal into parallel agents, foundation-first |
 
 ### TUI commands

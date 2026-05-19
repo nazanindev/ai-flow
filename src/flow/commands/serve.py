@@ -314,11 +314,15 @@ function renderRuns(runs){
     } else if(r.status==='complete'||r.status==='failed'||r.status==='cancelled'){
       acts=`<button class="act-btn act-del" onclick="deleteRun('${r.run_id}')">🗑 delete</button>`;
     }
+    const branchShort=r.branch?(r.branch.length>20?r.branch.slice(-20):r.branch):'—';
+    const prHtml=r.pr_url?`<a href="${r.pr_url}" target="_blank">#${r.pr_url.split('/').pop()}</a>`:'<span class="dim">—</span>';
     return`<tr>
       <td><a class="mono" href="/events/${r.run_id}" target="_blank" title="view events">${r.run_id}</a></td>
-      <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.goal}">${r.goal}</td>
+      <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.goal}">${r.goal}</td>
       <td><span class="badge badge-${r.status}">${r.status}</span></td>
       <td><span class="ph ${phCls(r.phase)}">${r.phase}</span></td>
+      <td class="muted mono" style="font-size:.68rem" title="${r.branch||''}">${branchShort}</td>
+      <td>${prHtml}</td>
       <td class="muted">${dur}</td>
       <td class="muted mono">$${r.cost_usd.toFixed(4)}</td>
       <td class="muted">${fmtTok(tok)}</td>
@@ -329,8 +333,8 @@ function renderRuns(runs){
   return`<div class="section-card">
     <div class="sh">Recent runs</div>
     <table class="rt">
-      <thead><tr><th>Run ID</th><th>Goal</th><th>Status</th><th>Phase</th><th>Duration</th><th>API cost</th><th>Sub tokens</th><th>Blocks</th><th>Actions</th></tr></thead>
-      <tbody>${rows||'<tr><td colspan="9" class="dim" style="text-align:center;padding:1rem">No runs yet</td></tr>'}</tbody>
+      <thead><tr><th>Run ID</th><th>Goal</th><th>Status</th><th>Phase</th><th>Branch</th><th>PR</th><th>Duration</th><th>API cost</th><th>Sub tokens</th><th>Blocks</th><th>Actions</th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="11" class="dim" style="text-align:center;padding:1rem">No runs yet</td></tr>'}</tbody>
     </table>
   </div>`;
 }

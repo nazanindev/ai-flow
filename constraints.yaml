@@ -35,6 +35,13 @@ auto_check_before_ship: true          # run code review before ship
 auto_remediate: true                  # spawn fix worker on verify/check failure
 auto_remediate_max_tries: 2           # cap before surfacing failure to user
 
+# Post-ship code review mode.
+# local: spawn a Claude Code reviewer session (subscription, findings shown in TUI)
+# gh: run flow ci-review --pr N (API spend, posts comment directly to GitHub PR)
+# both: local reviewer session + GH PR comment
+# off: skip post-ship review
+auto_review: local
+
 # ── API spend gate (flow utility calls: check, ship, ci-review) ───────────────
 # These hit ANTHROPIC_API_KEY and cost real money.
 api_spend_gate_usd: 1.00

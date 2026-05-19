@@ -190,14 +190,36 @@ class SubmitArea(TextArea):
         def control(self) -> "SubmitArea":
             return self.area
 
+    _history: list[str] = []
+    _history_pos: int = -1
+
     def on_key(self, event: Key) -> None:
         if event.key == "enter":
             event.prevent_default()
             event.stop()
             text = self.text.strip()
             if text:
+                self._history.insert(0, text)
+                if len(self._history) > 20:
+                    self._history.pop()
+                self._history_pos = -1
                 self.post_message(self.Submitted(self, text))
                 self.load_text("")
+        elif event.key == "up":
+            if self._history:
+                self._history_pos = min(self._history_pos + 1, len(self._history) - 1)
+                self.load_text(self._history[self._history_pos])
+                event.prevent_default()
+                event.stop()
+        elif event.key == "down":
+            if self._history_pos > 0:
+                self._history_pos -= 1
+                self.load_text(self._history[self._history_pos])
+            elif self._history_pos == 0:
+                self._history_pos = -1
+                self.load_text("")
+            event.prevent_default()
+            event.stop()
 
 
 # ── Drill-down screen ─────────────────────────────────────────────────────────
@@ -555,8 +577,9 @@ class FlowApp(App):
             else:
                 idx = int(arg)
                 sessions = self.orchestrator.sessions
-                if 1 <= idx <= len(sessions):
-                    self.push_screen(DrillDownScreen(sessions[idx - 1], self.orchestrator))
+                session = next((s for s in sessions if s.idx == idx), None)
+                if session:
+                    self.push_screen(DrillDownScreen(session, self.orchestrator))
                 else:
                     self.notify(f"No session {idx}", severity="warning")
         elif verb == "/stop":
@@ -610,7 +633,10 @@ class FlowApp(App):
             self.add_session_pane(session)
             self.notify("Smoke test started", timeout=3)
         elif verb == "/resume":
-            self.orchestrator._resume(arg)
+            session = self.orchestrator._resume(arg)
+            if session:
+                self.add_session_pane(session)
+                self.notify(f"Resumed: {session.goal[:50]}", timeout=3)
         elif verb == "/help":
             self.notify(
                 "/view N  /stop [N]  /dismiss N  /prompt N <msg>  /model opus|sonnet|haiku\n"
