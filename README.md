@@ -1,6 +1,8 @@
 # `flow`
 
-Personal AI dev harness. Single-agent pipeline for straightforward tasks, dispatcher mode for larger projects. Dispatcher takes a goal, breaks it into a plan, and dispatches to parallel agents. Hook-based enforcement, event-sourced state, foundation-first spawn pattern.
+A personal AI dev harness that constrains an agent instead of amplifying one. Flow owns the loop — it spawns Claude Code sessions inside hook-enforced walls — so an autonomous run stays bounded and auditable rather than open-ended. Single-agent pipeline for straightforward tasks; dispatcher mode decomposes a larger goal into parallel agents, foundation-first.
+
+Hook-based enforcement, event-sourced state, weighted step budgets.
 
 [6 Python CLI games in 10 minutes](https://github.com/nazanindev/ai_1.0) — each one its own task and parallel agent.
 
@@ -25,6 +27,8 @@ Limits live in `constraints.yaml` and are enforced by a **pre-tool hook** that r
 | `PreCompact` | Before context compaction | Injects a prompt that preserves RunState artifacts across compression |
 | `Stop` | Session end | Records token usage, runs clean-state checks |
 | `post-merge` (git) | After `git merge` | Checks if the active run's PR was merged; auto-closes the run |
+
+> This is also why flow isn't exposed as an MCP server. A tool is something the client's model can decline to call, or call and ignore the answer from — enforcement requires *owning the loop*, and a server that merely offers tools doesn't. The giveable artifact is the harness, not a service: `flow init` writes the hooks into your own Claude Code, so the wall runs on your machine instead of being a call you can skip.
 
 ### Weighted step budgets
 
