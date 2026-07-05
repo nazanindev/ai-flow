@@ -3,7 +3,7 @@ import json
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -103,8 +103,6 @@ class RunState:
     last_check_result: str = ""
     # Observability: UTC ISO timestamp when current phase started
     phase_started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-
-
 
 
 def activity_path(run_id: str) -> Path:
@@ -393,40 +391,6 @@ def load_active_run(project: str, branch: Optional[str] = None) -> Optional[RunS
     return load_run(row[0]) if row else None
 
 
-def get_incomplete_runs(project: str, limit: int = 20) -> list:
-    """List non-complete runs for a project, newest first."""
-    with _conn() as con:
-        rows = con.execute("""
-            SELECT run_id, goal, phase, status, cost_usd, updated_at
-            FROM runs
-            WHERE project = ? AND status != 'complete'
-            ORDER BY updated_at DESC
-            LIMIT ?
-        """, [project, limit]).fetchall()
-    cols = ["run_id", "goal", "phase", "status", "cost_usd", "updated_at"]
-    return [dict(zip(cols, r)) for r in rows]
-
-
-def cleanup_incomplete_runs(project: str, keep_run_id: str = "", include_keep: bool = False) -> int:
-    """Mark incomplete runs as complete for quick hygiene."""
-    with _conn() as con:
-        if include_keep:
-            row = con.execute("""
-                UPDATE runs
-                SET status = 'complete', updated_at = ?
-                WHERE project = ? AND status != 'complete'
-                RETURNING run_id
-            """, [datetime.now(timezone.utc).isoformat(), project]).fetchall()
-        else:
-            row = con.execute("""
-                UPDATE runs
-                SET status = 'complete', updated_at = ?
-                WHERE project = ? AND status != 'complete' AND run_id != ?
-                RETURNING run_id
-            """, [datetime.now(timezone.utc).isoformat(), project, keep_run_id]).fetchall()
-    return len(row or [])
-
-
 def save_session(
     session_id: str, run_id: str, project: str, branch: str, phase: str,
     model: str, tokens_in: int, tokens_out: int, cost_usd: float,
@@ -442,13 +406,6 @@ def save_session(
             datetime.now(timezone.utc).isoformat(),
             billing_source,
         ])
-
-
-def record_subscription_window(
-    tokens_in: int, tokens_out: int, plan: str = "pro",
-) -> None:
-    """No-op: subscription quota is now derived from session_end events via get_window_usage()."""
-    pass
 
 
 def get_window_usage(plan: str = "pro") -> dict:
@@ -504,11 +461,6 @@ def get_api_spend_today(project: Optional[str] = None) -> float:
                 AND substr(created_at, 1, 10) >= date('now')
             """).fetchone()
     return row[0] if row else 0.0
-
-
-def get_cost_today(project: Optional[str] = None) -> float:
-    """Alias for get_api_spend_today (kept for backward compatibility)."""
-    return get_api_spend_today(project)
 
 
 def get_subscription_tokens_today(project: Optional[str] = None) -> dict:
@@ -712,20 +664,6 @@ def get_run_events(run_id: str) -> list:
             d["metadata"] = {}
         result.append(d)
     return result
-
-
-def get_recent_blocks(project: str, n: int = 20) -> list:
-    """Return the most recent tool_blocked events for a project."""
-    with _conn() as con:
-        rows = con.execute("""
-            SELECT e.run_id, e.phase, e.tool_name, e.block_reason, e.created_at
-            FROM events e
-            JOIN runs r ON r.run_id = e.run_id
-            WHERE e.event_type = 'tool_blocked' AND r.project = ?
-            ORDER BY e.created_at DESC LIMIT ?
-        """, [project, n]).fetchall()
-    cols = ["run_id", "phase", "tool_name", "block_reason", "created_at"]
-    return [dict(zip(cols, r)) for r in rows]
 
 
 def set_run_status(run_id: str, status: RunStatus) -> bool:

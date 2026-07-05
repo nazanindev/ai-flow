@@ -5,11 +5,9 @@ import os
 from typing import Any, Optional, TYPE_CHECKING
 
 from flow.billing import calc_cost
-from flow.config import get_plan
 from flow.observe import trace_session
 from flow.tracker import (
     load_active_run,
-    record_subscription_window,
     save_run,
     save_session,
 )
@@ -51,8 +49,6 @@ def account_claude_code_session_end(
 
     if billing_source == "subscription":
         cost = 0.0
-        plan = get_plan()
-        record_subscription_window(tokens_in, tokens_out, plan=plan)
         if run:
             run.subscription_msgs += 1
             run.subscription_tokens_in += tokens_in
