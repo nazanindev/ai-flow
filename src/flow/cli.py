@@ -7,7 +7,7 @@ from typing import Optional
 
 app = typer.Typer(
     name="flow",
-    help="AI Flow — personal AI dev harness",
+    help="AI Flow — a control plane for autonomous coding agents",
     no_args_is_help=False,
     invoke_without_command=True,
 )

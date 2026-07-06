@@ -106,7 +106,7 @@ def build_briefing(run: RunState, style: dict = None, cwd: Optional[Path] = None
     except Exception:
         pass
 
-    return f"""## AUTOPILOT SESSION BRIEFING
+    return f"""## FLOW SESSION BRIEFING
 > This is a structured run context, not a chat history. Do not reference prior conversation.
 
 **Run ID:** {run.run_id}

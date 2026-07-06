@@ -6,7 +6,7 @@ A reference for understanding the system end-to-end: decisions, tradeoffs, and w
 
 ## What it does (one paragraph)
 
-`flow` is a personal AI dev harness. You type a task; it spins up an isolated git worktree, runs a `plan → execute → verify → ship` pipeline using Claude Code as the execution engine, and opens a PR. Multiple tasks run in parallel. A TUI shows all of them. The human's job is reviewing PRs — nothing else.
+`flow` is a control plane for autonomous coding agents. You type a task; it spins up an isolated git worktree, runs a `plan → execute → verify → ship` pipeline using Claude Code as the execution engine, and opens a PR. Multiple tasks run in parallel. A TUI shows all of them. The human's job is reviewing PRs — nothing else.
 
 ---
 

@@ -1,1 +1,1 @@
-"""AI Flow — personal AI dev harness."""
+"""AI Flow — a control plane for autonomous coding agents."""
