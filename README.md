@@ -51,13 +51,13 @@ This buys three things:
 
 ## Recovery: brief, don't replay
 
-Durable-execution engines recover by replaying event history, which requires the decider to be deterministic — in Temporal, nondeterminism is an error class. An agent's decider is non-deterministic by definition, so flow takes the other branch: recovery is a *reasoning task*, not a mechanical one.
+Durable-execution engines recover by replaying event history, which requires the decider to be deterministic — in Temporal, nondeterminism is an error class. An agent's decider is non-deterministic by definition, so flow takes the other branch: recovery is a *reasoning task*, delegated to the component that is best at reasoning. The division of labor is deliberate. flow spends its engineering on what the model can't do — enforce its own limits — and trusts it with what it demonstrably can: resuming from an honest description of the world.
 
-When a run resumes after a kill, flow computes the in-flight set — `tool_attempted` events since the last session boundary with no paired `tool_completed` — takes a `git diff` of uncommitted filesystem changes, and injects both into the new session's briefing: *here is what was in flight when you died, here is what actually landed on disk; reconcile before re-doing work.* The model does the reconciliation, because the model is the only component that can.
+When a run resumes after a kill, flow computes the in-flight set — `tool_attempted` events since the last session boundary with no paired `tool_completed` — takes a `git diff` of uncommitted filesystem changes, and injects both into the new session's briefing: *here is what was in flight when you died, here is what actually landed on disk; reconcile before re-doing work.* The model does the reconciliation — not as a fallback, but because reconciliation is judgment, and judgment is what the model is good at.
 
 The briefing itself is the same idea applied to context: each session starts from a structured projection of durable RunState — goal, phase, plan-step status, decisions, artifacts, a compressed summary — never from accumulated chat history. The context window is a view, rebuilt from state; it is not the state.
 
-The tradeoff is stated plainly: replay gives guarantees, briefing gives judgment. For a system whose whole job is supervising judgment, that's the right side of the trade — but it is a trade.
+The tradeoff is stated plainly: replay gives guarantees, briefing gives judgment. For a system whose whole job is supervising judgment, that's the right side of the trade — but it is a trade. It also leans on a property of the domain: the model can only reconcile what it can see, and in coding the world state is cheaply observable — `git diff` is a complete oracle of what actually landed.
 
 ### Relation to durable execution
 
