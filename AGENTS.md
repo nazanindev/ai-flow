@@ -37,10 +37,15 @@ Never treat code as complete until verification passes.
 - `README.md` — product overview and usage
 - `constraints.yaml` — hard runtime limits and gating rules
 - `routing.yaml` — phase and keyword model routing
-- `src/flow/repl.py` — `FlowOrchestrator`: multi-session TUI, `AgentSession` dataclass, drill-down
+- `src/flow/orchestrator.py` — `FlowOrchestrator`: shared state, git helpers, assembles the mixins below
+- `src/flow/runner.py` — `_RunnerMixin`: driving `claude -p` and the verify→check→ship auto-pipeline
+- `src/flow/workers.py` — `_WorkersMixin`: session spawning and the per-type worker threads
+- `src/flow/dispatcher.py` — `_DispatcherMixin`: foundation-first fan-out into parallel agents
+- `src/flow/controls.py` — `_ControlsMixin`: live table and interactive commands (`/stop`, `/prompt`, `/resume`)
+- `src/flow/session.py` — `AgentSession` dataclass
 - `src/flow/hooks/pretool.py` — pre-tool enforcement gate (step budget, bash allowlist, agent spawn, spend gate)
 - `src/flow/hooks/stop.py` — stop hook usage tracking and clean-state checks
-- `src/flow/tracker.py` — persistent state store (DuckDB)
+- `src/flow/tracker.py` — persistent state store (SQLite WAL)
 - `src/flow/run_manager.py` — `RunState` lifecycle: create, phase transitions, artifact recording
 
 ## Session Exit Expectations
