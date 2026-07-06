@@ -11,3 +11,6 @@ dist/
 .pytest_cache/
 .venv/
 venv/
+*.bak
+.env.*
+!.env.example
