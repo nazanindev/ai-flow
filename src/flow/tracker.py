@@ -447,39 +447,27 @@ def save_subagent_event(
 
 def get_api_spend_today(project: Optional[str] = None) -> float:
     """Real $ spent today via ANTHROPIC_API_KEY (flow utility calls only)."""
+    sql = ("SELECT COALESCE(SUM(cost_usd), 0) FROM sessions "
+           "WHERE billing_source = 'api' AND substr(created_at, 1, 10) >= date('now')")
+    params: list = []
+    if project:
+        sql += " AND project = ?"
+        params.append(project)
     with _conn() as con:
-        if project:
-            row = con.execute("""
-                SELECT COALESCE(SUM(cost_usd), 0) FROM sessions
-                WHERE billing_source = 'api' AND project = ?
-                AND substr(created_at, 1, 10) >= date('now')
-            """, [project]).fetchone()
-        else:
-            row = con.execute("""
-                SELECT COALESCE(SUM(cost_usd), 0) FROM sessions
-                WHERE billing_source = 'api'
-                AND substr(created_at, 1, 10) >= date('now')
-            """).fetchone()
+        row = con.execute(sql, params).fetchone()
     return row[0] if row else 0.0
 
 
 def get_subscription_tokens_today(project: Optional[str] = None) -> dict:
     """Total subscription tokens sent through Claude Code sessions today."""
+    sql = ("SELECT COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0) FROM sessions "
+           "WHERE billing_source = 'subscription' AND substr(created_at, 1, 10) >= date('now')")
+    params: list = []
+    if project:
+        sql += " AND project = ?"
+        params.append(project)
     with _conn() as con:
-        if project:
-            row = con.execute("""
-                SELECT COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0)
-                FROM sessions
-                WHERE billing_source = 'subscription' AND project = ?
-                AND substr(created_at, 1, 10) >= date('now')
-            """, [project]).fetchone()
-        else:
-            row = con.execute("""
-                SELECT COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0)
-                FROM sessions
-                WHERE billing_source = 'subscription'
-                AND substr(created_at, 1, 10) >= date('now')
-            """).fetchone()
+        row = con.execute(sql, params).fetchone()
     return {"tokens_in": row[0] if row else 0, "tokens_out": row[1] if row else 0}
 
 
@@ -502,21 +490,16 @@ def get_project_stats() -> list:
 
 def get_cost_per_pr(project: Optional[str] = None) -> list:
     """Return cost + step stats for all shipped runs that have a PR URL."""
+    sql = ("SELECT run_id, goal, pr_url, cost_usd, step_budget_used, updated_at, "
+           "subscription_msgs, subscription_tokens_in, subscription_tokens_out "
+           "FROM runs WHERE pr_url != '' AND pr_url IS NOT NULL")
+    params: list = []
+    if project:
+        sql += " AND project = ?"
+        params.append(project)
+    sql += " ORDER BY updated_at DESC"
     with _conn() as con:
-        if project:
-            rows = con.execute("""
-                SELECT run_id, goal, pr_url, cost_usd, step_budget_used, updated_at,
-                       subscription_msgs, subscription_tokens_in, subscription_tokens_out
-                FROM runs WHERE pr_url != '' AND pr_url IS NOT NULL AND project = ?
-                ORDER BY updated_at DESC
-            """, [project]).fetchall()
-        else:
-            rows = con.execute("""
-                SELECT run_id, goal, pr_url, cost_usd, step_budget_used, updated_at,
-                       subscription_msgs, subscription_tokens_in, subscription_tokens_out
-                FROM runs WHERE pr_url != '' AND pr_url IS NOT NULL
-                ORDER BY updated_at DESC
-            """).fetchall()
+        rows = con.execute(sql, params).fetchall()
     cols = [
         "run_id", "goal", "pr_url", "cost_usd", "step_budget_used", "updated_at",
         "subscription_msgs", "subscription_tokens_in", "subscription_tokens_out",
@@ -536,17 +519,15 @@ def get_recent_runs(project: Optional[str] = None, limit: int = 10) -> list:
             WHERE event_type = 'tool_blocked' GROUP BY run_id
         ) b ON b.run_id = r.run_id
     """
+    sql = base
+    params: list = []
+    if project:
+        sql += " WHERE r.project = ?"
+        params.append(project)
+    sql += " ORDER BY r.updated_at DESC LIMIT ?"
+    params.append(limit)
     with _conn() as con:
-        if project:
-            rows = con.execute(
-                base + " WHERE r.project = ? ORDER BY r.updated_at DESC LIMIT ?",
-                [project, limit],
-            ).fetchall()
-        else:
-            rows = con.execute(
-                base + " ORDER BY r.updated_at DESC LIMIT ?",
-                [limit],
-            ).fetchall()
+        rows = con.execute(sql, params).fetchall()
     cols = [
         "run_id", "goal", "phase", "status", "cost_usd", "updated_at",
         "subscription_msgs", "subscription_tokens_in", "subscription_tokens_out",
@@ -557,20 +538,16 @@ def get_recent_runs(project: Optional[str] = None, limit: int = 10) -> list:
 
 def get_latest_events(limit: int = 20, run_id: Optional[str] = None) -> list:
     """Return the most recent events across all runs (or filtered to one run)."""
+    sql = ("SELECT event_type, phase, tool_name, blocked, block_reason, "
+           "metadata, created_at, run_id FROM events")
+    params: list = []
+    if run_id:
+        sql += " WHERE run_id = ?"
+        params.append(run_id)
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
     with _conn() as con:
-        if run_id:
-            rows = con.execute("""
-                SELECT event_type, phase, tool_name, blocked, block_reason,
-                       metadata, created_at, run_id
-                FROM events WHERE run_id = ?
-                ORDER BY created_at DESC LIMIT ?
-            """, [run_id, limit]).fetchall()
-        else:
-            rows = con.execute("""
-                SELECT event_type, phase, tool_name, blocked, block_reason,
-                       metadata, created_at, run_id
-                FROM events ORDER BY created_at DESC LIMIT ?
-            """, [limit]).fetchall()
+        rows = con.execute(sql, params).fetchall()
     cols = ["event_type", "phase", "tool_name", "blocked", "block_reason",
             "metadata", "created_at", "run_id"]
     result = []
