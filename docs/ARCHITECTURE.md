@@ -38,7 +38,7 @@ hooks/ (invoked by Claude Code harness)
 
 ---
 
-## Database: SQLite at `~/.autopilot/costs.sqlite`
+## Database: SQLite at `~/.flow/costs.sqlite`
 
 > **Not DuckDB.** The store is SQLite. DuckDB was considered for analytics but the implementation uses SQLite with WAL mode for concurrent access.
 
@@ -87,7 +87,7 @@ Invoked before every tool call via `PreToolUse` hook. Decision tree:
 
 1. **`ExitPlanMode`** → parse numbered steps → save `plan_steps` → advance phase `plan → execute`
 2. **`Agent`** (subagent spawn) → gate by policy:
-   - `smart` (default): read-only agents always allowed; write-capable agents blocked if `cost_usd > AP_BUDGET_USD` (default `$1.00`)
+   - `smart` (default): read-only agents always allowed; write-capable agents blocked if `cost_usd > FLOW_BUDGET_USD` (default `$1.00`)
    - `phase_only`: only allowed in configured phases
 3. **`Bash`** → whitelist check against `allowed_bash_commands` in `constraints.yaml`
 4. **`Write/Edit/MultiEdit`** → phase gate (blocked in plan phase, except `.claude/plans/`)
@@ -129,7 +129,7 @@ When Claude Code compacts a context, this hook injects a structured summary prom
 
 **`inject_queue` (queue.Queue):** TUI pushes `/prompt` messages; planner worker blocks on `get(timeout=0.5)`.
 
-**Stop sentinel file (`~/.autopilot/stop_{run_id}`):** TUI creates it for `/stop`; `_launch_claude` polls it during subprocess loop.
+**Stop sentinel file (`~/.flow/stop_{run_id}`):** TUI creates it for `/stop`; `_launch_claude` polls it during subprocess loop.
 
 **Database writes:** SQLite with WAL mode. `pretool` uses `BEGIN IMMEDIATE` for the atomic budget check+append. Session updates are single-row writes, serialized by SQLite naturally. Hooks are separate processes, not threads — no shared memory conflicts.
 
@@ -225,7 +225,7 @@ The `plan:` / `quick:` / `review:` prefixes are user-facing overrides. They work
 
 **Subscription (default):** Claude Code runs against your claude.ai Pro/Max login. No real $ cost per call, but quota-limited. Tracked in 5-hour rolling windows.
 
-**API (`AP_FORCE_API_KEY=1`):** Utility calls (ship, check, ci-review, clarify) hit `ANTHROPIC_API_KEY` directly. Real $ billed.
+**API (`FLOW_FORCE_API_KEY=1`):** Utility calls (ship, check, ci-review, clarify) hit `ANTHROPIC_API_KEY` directly. Real $ billed.
 
 ### `billing.py::calc_cost()`
 
@@ -301,7 +301,7 @@ _tick() @ 4Hz (Textual timer):
   4. Notify if planner waiting for input
 ```
 
-**Activity file** (`~/.autopilot/activity_{run_id}.json`): written atomically by `pretool` on each tool call (`.tmp` rename), deleted by `stop.py`. Contains `{tool, ts, phase, event_id}`. Gives the TUI sub-second tool activity without polling the DB.
+**Activity file** (`~/.flow/activity_{run_id}.json`): written atomically by `pretool` on each tool call (`.tmp` rename), deleted by `stop.py`. Contains `{tool, ts, phase, event_id}`. Gives the TUI sub-second tool activity without polling the DB.
 
 **Drill-down** (`/view N`): Full-screen RichLog of `output_history` + input bar. `/prompt <msg>` pushes to `inject_queue`; `/stop` creates stop sentinel file; `/back` pops screen.
 

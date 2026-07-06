@@ -32,7 +32,7 @@ def init(
     force: bool = typer.Option(False, "--force", help="Overwrite existing hooks"),
     repo: bool = typer.Option(False, "--repo", help="Also scaffold repo-local harness artifacts"),
 ) -> None:
-    """Wire AI Flow hooks into ~/.claude/settings.json and create ~/.autopilot/.env."""
+    """Wire AI Flow hooks into ~/.claude/settings.json and create ~/.flow/.env."""
     from flow.commands.init import cmd_init
     cmd_init(force=force, repo=repo)
 

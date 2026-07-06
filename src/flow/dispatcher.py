@@ -117,7 +117,7 @@ class _DispatcherMixin:
                 return
 
             # Budget gate
-            api_gate = float(os.getenv("AP_BUDGET_USD") or c.get("api_spend_gate_usd", 1.0))
+            api_gate = float(os.getenv("FLOW_BUDGET_USD") or c.get("api_spend_gate_usd", 1.0))
             api_today = get_api_spend_today(self.project)
             if api_today >= api_gate:
                 self._session_push(

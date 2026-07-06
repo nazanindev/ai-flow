@@ -56,7 +56,7 @@ Opus plans, Sonnet executes, Haiku reviews and writes commit messages. Routing i
 
 ### Features and style
 
-`features.yaml` (versioned with the repo) tracks active feature work — the active feature's behavior and verification command are injected into every session briefing as a sprint contract. `~/.autopilot/style.yaml` controls AI-generated artifact format (commit messages, PR titles, PR bodies); per-repo overrides in `.ap-style.yaml` deep-merge on top.
+`features.yaml` (versioned with the repo) tracks active feature work — the active feature's behavior and verification command are injected into every session briefing as a sprint contract. `~/.flow/style.yaml` controls AI-generated artifact format (commit messages, PR titles, PR bodies); per-repo overrides in `.flow-style.yaml` deep-merge on top.
 
 ### Observability
 
@@ -75,14 +75,14 @@ pip install -e .
 flow init
 ```
 
-`flow init` writes hooks into `~/.claude/settings.json` and creates `~/.autopilot/.env`:
+`flow init` writes hooks into `~/.claude/settings.json` and creates `~/.flow/.env`:
 
 ```sh
 ANTHROPIC_API_KEY=sk-ant-...   # for ship, check, ci-review
-AP_PLAN=pro                    # pro | max5 | max20 | api_only
+FLOW_PLAN=pro                    # pro | max5 | max20 | api_only
 ```
 
-`flow init --repo` also scaffolds `features.yaml` and `.ap-style.yaml` in the current repo. State is persisted in `~/.autopilot/costs.sqlite` (SQLite WAL mode — safe for concurrent writes).
+`flow init --repo` also scaffolds `features.yaml` and `.flow-style.yaml` in the current repo. State is persisted in `~/.flow/costs.sqlite` (SQLite WAL mode — safe for concurrent writes).
 
 ---
 
@@ -115,7 +115,7 @@ Type a task, press Enter. Prefix to route it:
 ### CLI
 
 ```sh
-flow init [--force] [--repo]   # wire hooks; --repo scaffolds features.yaml / .ap-style.yaml
+flow init [--force] [--repo]   # wire hooks; --repo scaffolds features.yaml / .flow-style.yaml
 flow doctor [--fix]            # check hook health
 flow serve                     # local dashboard on :7331
 flow status                    # current run state and today's cost

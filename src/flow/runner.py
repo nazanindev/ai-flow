@@ -290,7 +290,7 @@ class _RunnerMixin:
             return
 
         self._session_push(session, "→ Shipping...\n")
-        ship_env = {**os.environ, "AP_ACTIVE": "0"}
+        ship_env = {**os.environ, "FLOW_ACTIVE": "0"}
         ship_result = subprocess.run(
             ["flow", "ship"],
             cwd=str(session.cwd),
@@ -323,7 +323,7 @@ class _RunnerMixin:
             ["flow", "ci-review", "--pr", pr_num],
             cwd=str(session.cwd),
             capture_output=True, text=True,
-            env={**os.environ, "AP_ACTIVE": "0"},
+            env={**os.environ, "FLOW_ACTIVE": "0"},
         )
         output = (result.stdout + result.stderr).strip()
         # Strip ANSI escape codes so TUI RichLog shows clean text
@@ -428,18 +428,18 @@ class _RunnerMixin:
             )
 
         env = os.environ.copy()
-        env["AP_ACTIVE"] = "1" if ap_active else "0"
-        env["AP_FLOW_HEADLESS"] = "1"
-        env["AP_NO_SPAWN"] = "1" if self.no_agents else env.get("AP_NO_SPAWN", "0")
-        env["AP_RUN_ID"] = session.run.run_id
-        if os.getenv("AP_FORCE_API_KEY") != "1":
+        env["FLOW_ACTIVE"] = "1" if ap_active else "0"
+        env["FLOW_HEADLESS"] = "1"
+        env["FLOW_NO_SPAWN"] = "1" if self.no_agents else env.get("FLOW_NO_SPAWN", "0")
+        env["FLOW_RUN_ID"] = session.run.run_id
+        if os.getenv("FLOW_FORCE_API_KEY") != "1":
             env.pop("ANTHROPIC_API_KEY", None)
 
         c = constraints()
         max_turns = int(c.get("max_turns_per_run", c.get("max_steps_per_run", 50)))
-        perm = os.getenv("AP_CLAUDE_PERMISSION_MODE", "bypassPermissions")
-        timeout_s = int(os.getenv("AP_CLAUDE_TIMEOUT_S", "600"))
-        stream_enabled = os.getenv("AP_CLAUDE_STREAM", "1") != "0"
+        perm = os.getenv("FLOW_CLAUDE_PERMISSION_MODE", "bypassPermissions")
+        timeout_s = int(os.getenv("FLOW_CLAUDE_TIMEOUT_S", "600"))
+        stream_enabled = os.getenv("FLOW_CLAUDE_STREAM", "1") != "0"
         output_format = "stream-json" if stream_enabled else "json"
 
         cmd = [
@@ -508,7 +508,7 @@ class _RunnerMixin:
                 proc.kill()
                 self._session_push(
                     session,
-                    f"\n✗ Timed out after {timeout_s}s — set AP_CLAUDE_TIMEOUT_S to increase\n",
+                    f"\n✗ Timed out after {timeout_s}s — set FLOW_CLAUDE_TIMEOUT_S to increase\n",
                 )
                 with session.lock:
                     session.status = "failed"

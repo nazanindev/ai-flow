@@ -37,16 +37,16 @@ def calc_cost(model: str, tokens_in: int, tokens_out: int, cache_read_tokens: in
     ) / 1_000_000
 
 
-_MOCK_API: bool = os.getenv("AP_MOCK_API") == "1"
+_MOCK_API: bool = os.getenv("FLOW_MOCK_API") == "1"
 
 
 class _MockResponse:
-    """Fake SDK response returned when AP_MOCK_API=1."""
+    """Fake SDK response returned when FLOW_MOCK_API=1."""
     class _Usage:
         input_tokens = 0
         output_tokens = 0
     class _Content:
-        text = "[mock] AP_MOCK_API=1 — real API call skipped"
+        text = "[mock] FLOW_MOCK_API=1 — real API call skipped"
     usage = _Usage()
     content = [_Content()]
 
@@ -104,7 +104,7 @@ def metered_call(client, model: str, *, run_id: str = "none", purpose: str, **kw
     Drop-in wrapper around client.messages.create that records real API spend
     in the sessions table (billing_source='api').
 
-    Set AP_MOCK_API=1 to skip the real API call and return a stub response —
+    Set FLOW_MOCK_API=1 to skip the real API call and return a stub response —
     useful when API credits are unavailable but you want to test the pipeline.
 
     Usage:
@@ -112,7 +112,7 @@ def metered_call(client, model: str, *, run_id: str = "none", purpose: str, **kw
                             purpose="commit_msg", max_tokens=120,
                             system=system, messages=[...])
     """
-    if os.getenv("AP_MOCK_API") == "1":
+    if os.getenv("FLOW_MOCK_API") == "1":
         return _MockResponse()
 
     if model.startswith("gemini"):

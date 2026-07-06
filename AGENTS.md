@@ -21,7 +21,7 @@ Never treat code as complete until verification passes.
 - Each user task spawns an `AgentSession`: git worktree + branch + background thread
 - Sessions run in parallel; the live table shows all of them
 - State machine per session: `plan -> execute -> verify -> ship`
-- Session state persisted in SQLite WAL (`~/.autopilot/costs.sqlite`)
+- Session state persisted in SQLite WAL (`~/.flow/costs.sqlite`)
 - Context injected from structured run artifacts, not raw chat transcripts
 - Hooks fire inside each `claude -p` subprocess (not in the orchestrator process)
 

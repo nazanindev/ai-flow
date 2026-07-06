@@ -40,7 +40,7 @@ def account_claude_code_session_end(
     run: Optional["RunState"] = None,
 ) -> None:
     """Mirror hooks/stop.py accounting (without clean-state checks)."""
-    billing_source = "api" if os.getenv("AP_FORCE_API_KEY") == "1" else "subscription"
+    billing_source = "api" if os.getenv("FLOW_FORCE_API_KEY") == "1" else "subscription"
     if run is None:
         run = load_active_run(project)
     run_id = run.run_id if run else "none"

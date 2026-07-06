@@ -2,18 +2,18 @@
 Claude Code Stop hook — invoked as: python3 -m flow.hooks.stop
 Reads session data from hook payload, writes to DuckDB + Langfuse.
 
-Usage and quota are persisted when this hook runs, except when AP_FLOW_HEADLESS=1
+Usage and quota are persisted when this hook runs, except when FLOW_HEADLESS=1
 (headless `claude -p` spawned by the flow REPL — that process records usage on exit
 so the prompt matches Anthropic). Interactive / IDE sessions omit that flag, so Stop
 remains authoritative there.
-Clean-state checks in verify/ship phases run only when AP_ACTIVE=1 (sessions launched
+Clean-state checks in verify/ship phases run only when FLOW_ACTIVE=1 (sessions launched
 from the flow REPL), so IDE or plain claude sessions are not penalized for an
 active run left on disk.
 
 Two billing surfaces:
   subscription (default) — Claude Code runs against claude.ai Pro/Max login.
     Records token + message quota into subscription_windows; no real $ computed.
-  api (AP_FORCE_API_KEY=1) — Claude Code bills via ANTHROPIC_API_KEY.
+  api (FLOW_FORCE_API_KEY=1) — Claude Code bills via ANTHROPIC_API_KEY.
     Computes and records real USD cost.
 """
 import json
@@ -23,8 +23,10 @@ import sys
 import uuid
 from pathlib import Path
 
+from flow.config import STATE_DIR
 from dotenv import load_dotenv
-load_dotenv(Path.home() / ".autopilot" / ".env")
+
+load_dotenv(STATE_DIR / ".env")
 
 from flow.config import get_project_id, get_branch, constraints
 from flow.session_accounting import account_claude_code_session_end
@@ -104,7 +106,7 @@ def main() -> None:
 
     run = load_active_run(project)
 
-    if os.getenv("AP_ACTIVE") == "1":
+    if os.getenv("FLOW_ACTIVE") == "1":
         clean_state_phases = set(
             constraints().get("clean_state_check_phases", ["verify", "ship"])
         )
@@ -121,7 +123,7 @@ def main() -> None:
 
     # Headless `claude -p` from the flow REPL meters here instead — Stop often
     # does not receive the same payload / timing; double-counting is avoided.
-    if os.getenv("AP_FLOW_HEADLESS") == "1":
+    if os.getenv("FLOW_HEADLESS") == "1":
         return
 
     cr = int(usage.get("cache_read_input_tokens") or 0)

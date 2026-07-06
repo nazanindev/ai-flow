@@ -7,10 +7,11 @@ Exit 0 always — PostToolUse hooks cannot block execution.
 import json
 import os
 import sys
-from pathlib import Path
 
+from flow.config import STATE_DIR
 from dotenv import load_dotenv
-load_dotenv(Path.home() / ".autopilot" / ".env")
+
+load_dotenv(STATE_DIR / ".env")
 
 
 def main() -> None:
@@ -19,7 +20,7 @@ def main() -> None:
     except Exception:
         return
 
-    run_id = os.getenv("AP_RUN_ID", "")
+    run_id = os.getenv("FLOW_RUN_ID", "")
     if not run_id or run_id == "none":
         return
 
