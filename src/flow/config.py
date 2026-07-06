@@ -1,17 +1,44 @@
 import os
+import shutil
 from pathlib import Path
 from dotenv import load_dotenv
 import yaml
 
-# Load from ~/.autopilot/.env (portable) then local .env (dev override)
-load_dotenv(Path.home() / ".autopilot" / ".env")
+# ── State directory + one-time migration ───────────────────────────────────
+# State lives in ~/.flow (formerly ~/.autopilot). If only the legacy dir exists,
+# move it once so existing run history / .env / style.yaml carry over untouched.
+_LEGACY_DIR = Path.home() / ".autopilot"
+STATE_DIR = Path.home() / ".flow"
+if not STATE_DIR.exists() and _LEGACY_DIR.exists():
+    try:
+        shutil.move(str(_LEGACY_DIR), str(STATE_DIR))
+    except Exception:
+        STATE_DIR = _LEGACY_DIR  # migration failed — keep legacy so state is never lost
+STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Load env from the state dir, then the legacy dir (if migration was skipped),
+# then a local .env (dev override).
+load_dotenv(STATE_DIR / ".env")
+load_dotenv(_LEGACY_DIR / ".env", override=False)
 load_dotenv(override=False)
 
-DB_PATH = Path(os.getenv("AP_DB_PATH", "~/.autopilot/costs.sqlite")).expanduser()
+# Back-compat: mirror any legacy AP_* env var onto its FLOW_* name (FLOW_ wins).
+for _k, _v in list(os.environ.items()):
+    if _k.startswith("AP_") and len(_k) > 3:
+        os.environ.setdefault("FLOW_" + _k[3:], _v)
+
+DB_PATH = Path(os.getenv("FLOW_DB_PATH", str(STATE_DIR / "costs.sqlite"))).expanduser()
+# If an env override still points inside the legacy dir, remap into the new one
+# (the file itself was moved with the directory).
+try:
+    if DB_PATH.parent == _LEGACY_DIR or _LEGACY_DIR in DB_PATH.parents:
+        DB_PATH = STATE_DIR / DB_PATH.name
+except Exception:
+    pass
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 _ROOT = Path(__file__).parent.parent.parent
-_STYLE_PATH = Path.home() / ".autopilot" / "style.yaml"
+_STYLE_PATH = STATE_DIR / "style.yaml"
 
 # Fallback caps used when constraints.yaml is unavailable
 _DEFAULT_PLAN_WINDOW_CAPS: dict = {
@@ -72,13 +99,13 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 
 def load_style() -> dict:
-    """Load global ~/.autopilot/style.yaml, deep-merge .ap-style.yaml from cwd on top."""
+    """Load global ~/.flow/style.yaml, deep-merge .flow-style.yaml from cwd on top."""
     global_style: dict = {}
     if _STYLE_PATH.exists():
         with open(_STYLE_PATH) as f:
             global_style = yaml.safe_load(f) or {}
 
-    local_path = Path.cwd() / ".ap-style.yaml"
+    local_path = Path.cwd() / ".flow-style.yaml"
     if local_path.exists():
         with open(local_path) as f:
             local_style = yaml.safe_load(f) or {}
@@ -122,8 +149,8 @@ def style_prompt(style: dict, sections: list) -> "str | None":
 
 
 def get_plan() -> str:
-    """Return the user's subscription plan from AP_PLAN env (default: pro)."""
-    return os.getenv("AP_PLAN", "pro").lower()
+    """Return the user's subscription plan from FLOW_PLAN env (default: pro)."""
+    return os.getenv("FLOW_PLAN", "pro").lower()
 
 
 def get_plan_window_caps() -> dict:

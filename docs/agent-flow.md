@@ -1,6 +1,6 @@
 # agent-flow
 
-agent-flow is an autopilot system for driving AI agents through structured, multi-phase workflows. It turns a high-level goal into a tracked run that moves through discrete phases — PLAN, EXECUTE, and SHIP — with human gate checks between each phase.
+agent-flow is a harness for driving AI agents through structured, multi-phase workflows. It turns a high-level goal into a tracked run that moves through discrete phases — PLAN, EXECUTE, and SHIP — with human gate checks between each phase.
 
 ---
 

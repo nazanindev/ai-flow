@@ -19,7 +19,7 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.styles import Style
 from rich.console import Console
 
-from flow.config import constraints, get_project_id, get_branch
+from flow.config import STATE_DIR, constraints, get_project_id, get_branch
 from flow.session import AgentSession
 from flow.runner import _RunnerMixin
 from flow.workers import _WorkersMixin
@@ -27,7 +27,7 @@ from flow.dispatcher import _DispatcherMixin
 from flow.controls import _ControlsMixin
 
 console = Console()
-HISTORY_PATH = Path.home() / ".autopilot" / "repl_history"
+HISTORY_PATH = STATE_DIR / "repl_history"
 HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 

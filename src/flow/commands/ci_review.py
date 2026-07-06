@@ -41,7 +41,7 @@ Output ONLY the markdown."""
 
 
 def _client() -> anthropic.Anthropic:
-    key = os.getenv("ANTHROPIC_API_KEY") or ("mock-key" if os.getenv("AP_MOCK_API") == "1" else "")
+    key = os.getenv("ANTHROPIC_API_KEY") or ("mock-key" if os.getenv("FLOW_MOCK_API") == "1" else "")
     return anthropic.Anthropic(api_key=key)
 
 

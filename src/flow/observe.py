@@ -51,11 +51,11 @@ def _client():
 
 
 def _run_trace_id(run_id: str) -> str:
-    return _trace_id_hex(f"autopilot:run:{run_id}")
+    return _trace_id_hex(f"flow:run:{run_id}")
 
 
 def _claude_session_trace_id(run_id: str, session_id: str) -> str:
-    return _trace_id_hex(f"autopilot:claude_session:{run_id}:{session_id}")
+    return _trace_id_hex(f"flow:claude_session:{run_id}:{session_id}")
 
 
 def trace_run_started(
@@ -64,7 +64,7 @@ def trace_run_started(
     branch: str,
     goal: str,
 ) -> None:
-    """Open a root trace for an autopilot run (call once from create_run)."""
+    """Open a root trace for an flow run (call once from create_run)."""
     lf = _client()
     if not lf or not run_id or run_id == "none":
         return
@@ -72,15 +72,15 @@ def trace_run_started(
         tid = _run_trace_id(run_id)
         span = lf.start_span(
             trace_context={"trace_id": tid},
-            name="autopilot-run",
-            metadata=_meta_str({"run_id": run_id, "branch": branch, "feature": "autopilot"}),
+            name="flow-run",
+            metadata=_meta_str({"run_id": run_id, "branch": branch, "feature": "flow"}),
             input={"goal": (goal[:500] + "…") if len(goal) > 500 else goal or ""},
         )
         span.update_trace(
             name=f"run:{run_id}",
             user_id=project,
             session_id=run_id,
-            tags=["autopilot", project, branch],
+            tags=["flow", project, branch],
             metadata=_meta_str({"run_id": run_id, "branch": branch}),
         )
         span.end()
@@ -118,7 +118,7 @@ def trace_session(
             "claude_session_id": session_id,
             "context_tokens": str(context_tokens),
             "duration_s": str(duration_s),
-            "feature": "autopilot",
+            "feature": "flow",
             **{k: str(v) for k, v in (metadata or {}).items()},
         }
         gen = lf.start_observation(
@@ -138,7 +138,7 @@ def trace_session(
         gen.update_trace(
             user_id=project,
             session_id=lf_session,
-            tags=["autopilot", project, phase, branch],
+            tags=["flow", project, phase, branch],
             metadata=_meta_str(
                 {
                     "run_id": run_id,

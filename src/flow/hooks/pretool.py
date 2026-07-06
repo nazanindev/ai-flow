@@ -9,8 +9,10 @@ import sys
 import uuid
 from pathlib import Path
 
+from flow.config import STATE_DIR
 from dotenv import load_dotenv
-load_dotenv(Path.home() / ".autopilot" / ".env")
+
+load_dotenv(STATE_DIR / ".env")
 
 from flow.config import get_project_id, get_branch, constraints, get_plan, get_plan_window_caps
 from flow.tracker import (
@@ -94,7 +96,7 @@ def _agent_spawn_decision(
 ) -> None:
     """Apply agent spawn policy and block or fall through."""
     policy = c.get("agent_spawn_policy", "smart")
-    api_spend_gate = float(os.getenv("AP_BUDGET_USD") or c.get("api_spend_gate_usd", 1.0))
+    api_spend_gate = float(os.getenv("FLOW_BUDGET_USD") or c.get("api_spend_gate_usd", 1.0))
     api_spend_today = get_api_spend_today(project)
 
     # Classify agent by its declared tools
@@ -163,7 +165,7 @@ def _agent_spawn_decision(
 
 
 def main() -> None:
-    if os.getenv("AP_ACTIVE") != "1":
+    if os.getenv("FLOW_ACTIVE") != "1":
         sys.exit(0)
 
     init_db()
@@ -204,9 +206,9 @@ def main() -> None:
 
     # ── Agent spawn gate ─────────────────────────────────────────────────────
     if tool_name == "Agent":
-        no_spawn = os.getenv("AP_NO_SPAWN", "0") == "1"
+        no_spawn = os.getenv("FLOW_NO_SPAWN", "0") == "1"
         if no_spawn:
-            reason = "AP_NO_SPAWN=1: agent spawning disabled for this session"
+            reason = "FLOW_NO_SPAWN=1: agent spawning disabled for this session"
             save_subagent_event(session_id, run_id, project, phase, "", False, reason)
             trace_subagent(session_id, run_id, project, phase, False, reason)
             block(reason)

@@ -622,12 +622,12 @@ class FlowApp(App):
         elif verb == "/no-agents":
             import os
             self.orchestrator.no_agents = not self.orchestrator.no_agents
-            os.environ["AP_NO_SPAWN"] = "1" if self.orchestrator.no_agents else "0"
+            os.environ["FLOW_NO_SPAWN"] = "1" if self.orchestrator.no_agents else "0"
             self.notify(f"Agent spawning: {'OFF' if self.orchestrator.no_agents else 'ON'}")
         elif verb == "/budget":
             import os
-            os.environ["AP_BUDGET_USD"] = arg or "2.00"
-            self.notify(f"Budget cap: ${os.environ['AP_BUDGET_USD']}")
+            os.environ["FLOW_BUDGET_USD"] = arg or "2.00"
+            self.notify(f"Budget cap: ${os.environ['FLOW_BUDGET_USD']}")
         elif verb == "/test-flow":
             session = self.orchestrator._start_test_session()
             self.add_session_pane(session)

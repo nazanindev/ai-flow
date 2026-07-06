@@ -47,7 +47,7 @@ def cmd_status() -> None:
     sub_tokens = get_subscription_tokens_today(project)
     window = get_window_usage(plan)
     c = constraints()
-    api_gate = float(os.getenv("AP_BUDGET_USD") or c.get("api_spend_gate_usd", 1.0))
+    api_gate = float(os.getenv("FLOW_BUDGET_USD") or c.get("api_spend_gate_usd", 1.0))
     msg_cap = caps.get(plan, {}).get("msgs", 0)
     run = load_active_run(project)
 

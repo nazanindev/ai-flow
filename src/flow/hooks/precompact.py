@@ -6,10 +6,11 @@ and drops conversation noise.
 import json
 import os
 import sys
-from pathlib import Path
 
+from flow.config import STATE_DIR
 from dotenv import load_dotenv
-load_dotenv(Path.home() / ".autopilot" / ".env")
+
+load_dotenv(STATE_DIR / ".env")
 
 from flow.config import get_project_id
 from flow.tracker import init_db, load_active_run
@@ -30,7 +31,7 @@ Format the summary as structured markdown under these exact headers."""
 
 
 def main() -> None:
-    if os.getenv("AP_ACTIVE") != "1":
+    if os.getenv("FLOW_ACTIVE") != "1":
         sys.exit(0)
 
     init_db()

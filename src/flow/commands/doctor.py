@@ -135,14 +135,14 @@ def cmd_doctor(fix: bool = False) -> None:
                     "session_id": "doctor",
                 }
             )
-            code, out, err = _run_hook_stdin(cmd, payload + "\n", {"AP_ACTIVE": "1"})
+            code, out, err = _run_hook_stdin(cmd, payload + "\n", {"FLOW_ACTIVE": "1"})
             if code != 0:
                 console.print(f"  [red]✗ pretool stdin smoke test exit {code}[/red]")
                 if err.strip():
                     console.print(f"  [dim]{err.strip()[:500]}[/dim]")
                 ok = False
             else:
-                console.print("  [green]✓ PreToolUse smoke (Bash echo, AP_ACTIVE=1)[/green]")
+                console.print("  [green]✓ PreToolUse smoke (Bash echo, FLOW_ACTIVE=1)[/green]")
         elif "flow.hooks.stop" in cmd:
             payload = json.dumps(
                 {
@@ -151,14 +151,14 @@ def cmd_doctor(fix: bool = False) -> None:
                     "usage": {"input_tokens": 0, "output_tokens": 0},
                 }
             )
-            code, _out, err = _run_hook_stdin(cmd, payload + "\n", {"AP_FLOW_HEADLESS": "1"})
+            code, _out, err = _run_hook_stdin(cmd, payload + "\n", {"FLOW_HEADLESS": "1"})
             if code != 0:
                 console.print(f"  [red]✗ stop hook exit {code}[/red]")
                 if err.strip():
                     console.print(f"  [dim]{err.strip()[:500]}[/dim]")
                 ok = False
             else:
-                console.print("  [green]✓ Stop smoke (AP_FLOW_HEADLESS=1)[/green]")
+                console.print("  [green]✓ Stop smoke (FLOW_HEADLESS=1)[/green]")
         elif "flow.hooks.posttool" in cmd:
             payload = json.dumps(
                 {
@@ -168,16 +168,16 @@ def cmd_doctor(fix: bool = False) -> None:
                     "session_id": "doctor",
                 }
             )
-            code, _out, err = _run_hook_stdin(cmd, payload + "\n", {"AP_RUN_ID": "none"})
+            code, _out, err = _run_hook_stdin(cmd, payload + "\n", {"FLOW_RUN_ID": "none"})
             if code != 0:
                 console.print(f"  [red]✗ posttool exit {code}[/red]")
                 if err.strip():
                     console.print(f"  [dim]{err.strip()[:500]}[/dim]")
                 ok = False
             else:
-                console.print("  [green]✓ PostToolUse smoke (AP_RUN_ID=none)[/green]")
+                console.print("  [green]✓ PostToolUse smoke (FLOW_RUN_ID=none)[/green]")
         elif "flow.hooks.precompact" in cmd:
-            code, out, err = _run_hook_stdin(cmd, "{}\n", {"AP_ACTIVE": "1"})
+            code, out, err = _run_hook_stdin(cmd, "{}\n", {"FLOW_ACTIVE": "1"})
             if code != 0:
                 console.print(f"  [red]✗ precompact exit {code}[/red]")
                 if err.strip():
@@ -186,7 +186,7 @@ def cmd_doctor(fix: bool = False) -> None:
             elif not out.strip().startswith("{"):
                 console.print(f"  [yellow]? precompact stdout not JSON[/yellow]")
             else:
-                console.print("  [green]✓ PreCompact smoke (AP_ACTIVE=1)[/green]")
+                console.print("  [green]✓ PreCompact smoke (FLOW_ACTIVE=1)[/green]")
 
     if ok:
         console.print("\n[green]✓ Doctor: all hook checks passed.[/green]")
