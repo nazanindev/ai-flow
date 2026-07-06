@@ -25,18 +25,18 @@ class _DispatcherMixin:
 
         c = constraints()
         max_spawn = int(c.get("dispatcher_max_spawn", 4))
-        COORD_MODEL = "claude-opus-4-7"
+        DISPATCH_MODEL = "claude-opus-4-7"
         run_id = session.run.run_id
         project = session.run.project
 
         def _ev(event_type: str, metadata: dict = None) -> None:
-            save_event(run_id, event_type, project=project, phase="coordinate", metadata=metadata)
+            save_event(run_id, event_type, project=project, phase="dispatch", metadata=metadata)
 
         def _activity(msg: str) -> None:
             try:
                 import time as _t
                 activity_path(run_id).write_text(
-                    json.dumps({"tool": msg, "ts": _t.time(), "phase": "coordinate", "event_id": ""})
+                    json.dumps({"tool": msg, "ts": _t.time(), "phase": "dispatch", "event_id": ""})
                 )
             except Exception:
                 pass
@@ -71,7 +71,7 @@ class _DispatcherMixin:
         try:
             client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
             msg = metered_call(
-                client, COORD_MODEL,
+                client, DISPATCH_MODEL,
                 run_id=run_id,
                 purpose="dispatcher-plan",
                 max_tokens=4096,
@@ -201,7 +201,7 @@ class _DispatcherMixin:
                 session.status = "done"
 
         except Exception as e:
-            self._session_push(session, f"✗ Coordinator error: {e}\n")
+            self._session_push(session, f"✗ Dispatcher error: {e}\n")
             _ev("dispatcher_failed", {"reason": "exception", "error": str(e)[:200]})
             set_run_status(run_id, RunStatus.failed)
             with session.lock:
